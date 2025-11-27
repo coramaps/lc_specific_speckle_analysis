@@ -1326,9 +1326,21 @@ class PatchYielder:
                       for count in image_usage_counter[unique_key].values())
         
         def get_next_available_image() -> Optional[ImageTuple]:
-            """Get next available (non-exhausted) image tuple."""
-            for i, tuple_obj in enumerate(self.image_tuples):
+            """Get next available (non-exhausted) image tuple in cycling order."""
+            nonlocal current_image_idx
+            
+            # Check if current image is still available
+            if current_image_idx < len(self.image_tuples):
+                current_tuple = self.image_tuples[current_image_idx]
+                if not is_image_exhausted(current_tuple):
+                    return current_tuple
+            
+            # Find next available image starting from current position
+            for i in range(len(self.image_tuples)):
+                idx = (current_image_idx + 1 + i) % len(self.image_tuples)
+                tuple_obj = self.image_tuples[idx]
                 if not is_image_exhausted(tuple_obj):
+                    current_image_idx = idx
                     return tuple_obj
             return None
         
@@ -1344,9 +1356,12 @@ class PatchYielder:
                         time_str = extract_time_from_filename(tuple_obj.vv_path.name)
                         unique_key = f"{tuple_obj.date}_{time_str}_{i}"
                         image_usage_counter[unique_key] = {class_id: 0 for class_id in self.config.classes}
+                    current_image_idx = 0  # Reset image index
                     current_tuple = self.image_tuples[0]
                 
-                logger.debug(f"Using image tuple: {current_tuple.date}")
+                # Get time string for logging
+                time_str = extract_time_from_filename(current_tuple.vv_path.name)
+                logger.debug(f"Using image tuple: {current_tuple.date}_{time_str} (index {current_image_idx})")
                 vv_src, vh_src = get_open_datasets(current_tuple)
                 
                 batch_patches = []
@@ -1435,10 +1450,15 @@ class PatchYielder:
                     labels_array = labels_array[indices]
                     
                     logger.debug(f"Yielding batch: {patches_array.shape}, labels: {len(labels_array)}")
+                    
+                    # Advance to next image for next batch to ensure cycling
+                    current_image_idx = (current_image_idx + 1) % len(self.image_tuples)
+                    
                     yield patches_array, labels_array
                 else:
                     logger.warning(f"No patches generated for {mode.value} mode")
-                    break
+                    # Try next image before giving up
+                    current_image_idx = (current_image_idx + 1) % len(self.image_tuples)
         
         finally:
             # Flush any remaining patches in cache
