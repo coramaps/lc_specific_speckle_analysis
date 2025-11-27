@@ -66,30 +66,16 @@ class ImageTuple:
 class PatchYielder:
     """Yields patches from satellite data for training/validation/testing."""
     
-    def __init__(self, config: TrainingDataConfig, seed: int = 42, patch_cache_size: int = 5000):
+    def __init__(self, config: TrainingDataConfig, seed: int = 42):
         """Initialize PatchYielder.
         
         Args:
             config: Training data configuration
             seed: Random seed for reproducible splits
-            patch_cache_size: Number of patches to accumulate before caching to disk
         """
         self.config = config
         self.seed = seed
         self.target_epsg = 'EPSG:32632'  # UTM Zone 32N
-        self.patch_cache_size = patch_cache_size
-        
-        # Initialize patch cache for each mode
-        self.patch_cache = {
-            DataMode.TRAIN: [],
-            DataMode.VALIDATION: [],
-            DataMode.TEST: []
-        }
-        self.cache_batch_counter = {
-            DataMode.TRAIN: 0,
-            DataMode.VALIDATION: 0,
-            DataMode.TEST: 0
-        }
         
         # Set random seeds for reproducibility
         random.seed(seed)
@@ -1072,187 +1058,116 @@ class PatchYielder:
         
         return max_patches
     
-    def _cache_patches(self, patches: List[Patch], mode: DataMode) -> None:
-        """Cache a list of patches with metadata and traceability info.
+    def _cache_patches_for_file(self, patches: List[Patch], mode: DataMode, image_tuple: ImageTuple) -> None:
+        """Cache all patches for a specific image file at once.
         
         Args:
             patches: List of Patch objects to cache
-            mode: Data mode (train/validation/test)
+            mode: Data mode (train/validation/test) 
+            image_tuple: ImageTuple containing the source files
         """
         if not patches:
             return
         
-    
-        # Create patches cache directory structure
+        # Create cache directory
         cache_dir = PROJECT_ROOT / "data" / "cache" / "patches" / mode.value
         cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create unique hash from mode, config and batch counter
-        batch_id = self.cache_batch_counter[mode]
-        
+        # Create hash from filenames and relevant parameters
         cache_info = {
             "mode": mode.value,
-            "patch_size": len(patches),
-            "classes": sorted([int(c) for c in self.config.classes]),
-            "orbit": self.config.orbits[0] if self.config.orbits else "unknown",
-            "batch_id": batch_id  # Unique batch identifier
-
+            "vv_file": image_tuple.vv_path.name,
+            "vh_file": image_tuple.vh_path.name,
+            "patch_size": self.config.neural_network.patch_size,
+            "classes": sorted(self.config.classes),
+            "n_patches_per_feature": self.config.n_patches_per_feature,
+            "n_patches_per_area": self.config.n_patches_per_area,
+            "epsg": self.target_epsg,
+            "seed": self.seed
         }
         
-        import json
+        # Create stable hash from file info and parameters
         combined_info = json.dumps(cache_info, sort_keys=True)
-        cache_hash = hashlib.md5(combined_info.encode()).hexdigest()[:8]
-        hash_dir = cache_dir / cache_hash
-        hash_dir.mkdir(exist_ok=True)
+        file_hash = hashlib.md5(combined_info.encode()).hexdigest()[:12]
         
-        # Create traceability JSON file for the hash folder
-        metadata_file = hash_dir / "cache_metadata.json"
-        if not metadata_file.exists():
-            # Collect unique sources and metadata for traceability
-            unique_dates = sorted(set(p.date for p in patches))
-            unique_orbits = sorted(set(p.orbit for p in patches))
-            unique_classes = sorted(set(p.class_id for p in patches))
-            unique_src_files = sorted(set(str(f) for p in patches for f in p.src_files))
-            
-            # Convert all values to JSON-serializable types
-            def json_safe(obj):
-                """Convert numpy types to native Python types."""
-                if hasattr(obj, 'item'):  # numpy scalar
-                    return obj.item()
-                elif isinstance(obj, (list, tuple)):
-                    return [json_safe(item) for item in obj]
-                elif isinstance(obj, dict):
-                    return {str(k): json_safe(v) for k, v in obj.items()}
-                else:
-                    return obj
-            
-            cache_metadata = {
-                "cache_hash": cache_hash,
-                "data_mode": mode.value,
-                "creation_time": datetime.datetime.now().isoformat(),
-                "total_patches": len(patches),
-                "patch_size": int(self.config.neural_network.patch_size),
-                "statistics": {
-                    "dates": [str(d) for d in unique_dates],
-                    "orbits": [str(o) for o in unique_orbits], 
-                    "classes": [int(c) for c in unique_classes],
-                    "class_distribution": {str(k): int(v) for k, v in pd.Series([p.class_id for p in patches]).value_counts().sort_index().items()}
-                },
-                "source_files": unique_src_files[:10],  # First 10 to avoid huge lists
-                "source_file_count": len(unique_src_files),
-                "config_info": {
-                    "n_patches_per_feature": int(self.config.n_patches_per_feature),
-                    "n_patches_per_area": float(self.config.n_patches_per_area),
-                    "target_epsg": str(self.target_epsg),
-                    "batch_size": int(self.config.neural_network.batch_size)
-                }
-            }
-            
-            with open(metadata_file, 'w') as f:
-                import json
-                json.dump(cache_metadata, f, indent=2)
-            logger.info(f"Created traceability metadata: {metadata_file.name}")
+        # Simple filename: mode_filehash.npz
+        cache_filename = f"{mode.value}_{file_hash}.npz"
+        cache_file = cache_dir / cache_filename
         
-        # Load existing patches if any and append new ones
-        existing_patches = []
-        existing_patch_files = list(hash_dir.glob("patches_*.pkl"))
-        for patch_file in existing_patch_files:
-            
-            with open(patch_file, 'rb') as f:
-                existing_patches.extend(pickle.load(f))
-            
+        # Convert patches to arrays for efficient storage
+        patch_data = np.array([p.data for p in patches])
+        patch_labels = np.array([p.class_id for p in patches])
         
-        # Combine existing and new patches
-        all_patches = existing_patches + patches
+        # Create metadata
+        metadata = {
+            'mode': mode.value,
+            'creation_time': datetime.datetime.now().isoformat(),
+            'total_patches': len(patches),
+            'patch_size': self.config.neural_network.patch_size,
+            'vv_file': str(image_tuple.vv_path),
+            'vh_file': str(image_tuple.vh_path),
+            'date': image_tuple.date,
+            'classes': sorted(set(int(p.class_id) for p in patches)),
+            'class_distribution': {str(k): int(v) for k, v in pd.Series(patch_labels).value_counts().sort_index().items()},
+            'config_hash': file_hash
+        }
         
-        # Clear existing files to recreate with proper numbering
-        for old_file in existing_patch_files:
-            old_file.unlink()
-        for old_file in hash_dir.glob("patches_*.gpkg"):
-            old_file.unlink()
+        # Save patches and metadata in single NPZ file
+        np.savez_compressed(
+            cache_file,
+            patches=patch_data,
+            labels=patch_labels,
+            metadata=json.dumps(metadata).encode('utf-8')
+        )
         
-        # Use larger chunk size for fewer files (10,000 patches per file)
-        chunk_size = 10000
+        logger.info(f"Cached {len(patches)} patches for {image_tuple.date} in {cache_filename}")
         
-        for i in range(0, len(all_patches), chunk_size):
-            chunk = all_patches[i:i + chunk_size]
-            n_start = i
-            n_end = min(i + chunk_size - 1, len(all_patches) - 1)
-            
-            # Cache patch data as pickle
-            patch_file = hash_dir / f"patches_{n_start:06d}-{n_end:06d}.pkl"
-            with open(patch_file, 'wb') as f:
-                pickle.dump(chunk, f)
-            
-            # Create metadata GeoDataFrame for patches
-            geometries = []
-            metadata = []
-            
-            for patch in chunk:
-                # Create polygon from patch bounds
-                minx, miny, maxx, maxy = patch.bounds
-                geom = box(minx, miny, maxx, maxy)
-                geometries.append(geom)
-                
-                metadata.append({
-                    'class': patch.class_id,
-                    'date': patch.date,
-                    'orbit': patch.orbit,
-                    'data_mode': patch.data_mode.value,
-                    'src_vv': str(patch.src_files[0]),
-                    'src_vh': str(patch.src_files[1])
-                })
-            
-            # Create GeoDataFrame and save as GPKG
-            gdf = gpd.GeoDataFrame(metadata, geometry=geometries, crs=all_patches[0].crs)
-            gpkg_file = hash_dir / f"patches_{n_start:06d}-{n_end:06d}.gpkg"
-            gdf.to_file(gpkg_file, driver='GPKG')
-        
-        logger.info(f"Cached {len(patches)} new patches (total: {len(all_patches)}) in {hash_dir} ({len(list(hash_dir.glob('*.pkl')))} files)")
-    
-    def _add_patches_to_cache(self, patches: List[Patch], mode: DataMode) -> None:
-        """Add patches to in-memory cache and flush to disk when cache size is reached.
+    def _load_cached_patches(self, mode: DataMode, image_tuple: ImageTuple) -> Tuple[np.ndarray, np.ndarray]:
+        """Load cached patches for a specific image file.
         
         Args:
-            patches: List of Patch objects to add to cache
             mode: Data mode (train/validation/test)
-        """
-        if not patches:
-            return
+            image_tuple: ImageTuple containing the source files
             
-        # Add patches to in-memory cache
-        self.patch_cache[mode].extend(patches)
-        
-        # Check if cache size threshold is reached
-        if len(self.patch_cache[mode]) >= self.patch_cache_size:
-            self._flush_patch_cache(mode)
-    
-    def _flush_patch_cache(self, mode: DataMode) -> None:
-        """Flush the in-memory patch cache for a mode to disk.
-        
-        Args:
-            mode: Data mode to flush
+        Returns:
+            Tuple of (patches, labels) or (None, None) if not cached
         """
-        if not self.patch_cache[mode]:
-            return
-            
-        logger.info(f"Flushing {len(self.patch_cache[mode])} patches to disk for {mode.value} mode")
+        cache_dir = PROJECT_ROOT / "data" / "cache" / "patches" / mode.value
         
+        # Create the same hash as used for caching
+        cache_info = {
+            "mode": mode.value,
+            "vv_file": image_tuple.vv_path.name,
+            "vh_file": image_tuple.vh_path.name,
+            "patch_size": self.config.neural_network.patch_size,
+            "classes": sorted(self.config.classes),
+            "n_patches_per_feature": self.config.n_patches_per_feature,
+            "n_patches_per_area": self.config.n_patches_per_area,
+            "epsg": self.target_epsg,
+            "seed": self.seed
+        }
         
-        # Cache all patches in memory
-        self._cache_patches(self.patch_cache[mode], mode)
+        combined_info = json.dumps(cache_info, sort_keys=True)
+        file_hash = hashlib.md5(combined_info.encode()).hexdigest()[:12]
+        cache_filename = f"{mode.value}_{file_hash}.npz"
+        cache_file = cache_dir / cache_filename
         
-        # Increment batch counter for unique identifiers
-        self.cache_batch_counter[mode] += 1
-        
-    
-    def flush_all_caches(self) -> None:
-        """Flush all remaining patches in memory caches to disk."""
-        for mode in [DataMode.TRAIN, DataMode.VALIDATION, DataMode.TEST]:
-            if self.patch_cache[mode]:
+        if cache_file.exists():
+            try:
+                data = np.load(cache_file, allow_pickle=True)
+                patches = data['patches']
+                labels = data['labels']
+                metadata = json.loads(data['metadata'].item().decode('utf-8'))
                 
-                logger.info(f"Final flush: {len(self.patch_cache[mode])} patches for {mode.value} mode")
-                self._flush_patch_cache(mode)
+                logger.info(f"Loaded {len(patches)} cached patches for {image_tuple.date} from {cache_filename}")
+                return patches, labels
+            except Exception as e:
+                logger.warning(f"Failed to load cached patches from {cache_filename}: {e}")
+                return None, None
+        else:
+            return None, None
+    
+
                 
     
     def _extract_patches_to_objects(self, polygon_row: pd.Series, vv_src: rasterio.DatasetReader, 
@@ -1448,136 +1363,177 @@ class PatchYielder:
         
         return patches
     
-    def yield_batch(self, mode: DataMode, n_samples_per_polygon: int = 1) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+    def cache_patches_for_file(self, mode: DataMode, image_tuple: ImageTuple, n_samples_per_polygon: int = 1) -> None:
         """
-        Generate batches of patches following the specified workflow:
-        - Iterate over images
-        - For each image: load valid AOI, validate it, subset geodataframe
-        - For each feature: follow the buffering and patch extraction workflow
-        """
-        logger.info(f"Starting batch yielding for {mode.value} mode")
-        logger.info(f"Available image tuples: {[img.date for img in self.image_tuples]}")
-        logger.info(f"Samples per polygon: {n_samples_per_polygon}")
+        Generate and cache patches for a specific image file. This is the heavy computation.
         
-        batch_size = self.config.neural_network.batch_size
-        patch_size = self.config.neural_network.patch_size
+        Args:
+            mode: Data mode (train/validation/test)
+            image_tuple: ImageTuple containing the source files
+            n_samples_per_polygon: Number of samples to extract per polygon
+        """
+        logger.info(f"Generating patches for {image_tuple.date} (this may take a while)")
         
         # Get the split data for this mode
         split_data = self.data_splits[mode]
-        logger.debug(f"Split data has {len(split_data)} polygons")
         
-        # Initialize batch collection
+        # Load the valid AOI for this image
+        unique_key = self._generate_stable_unique_key(image_tuple)
+        
+        if unique_key not in self.tuple_aois:
+            logger.warning(f"No valid AOI found for image {unique_key}")
+            return
+            
+        valid_aoi = self.tuple_aois[unique_key]
+        
+        # Validate the AOI
+        if valid_aoi.geometry.iloc[0].is_empty or valid_aoi.geometry.iloc[0].area == 0:
+            logger.warning(f"AOI for {unique_key} is empty or has zero area")
+            return
+            
+        # Get polygons that intersect with this AOI and are in the current split
+        intersecting_positions = self.polygon_image_intersections.get(unique_key, set())
+        split_indices = set(split_data.index)
+        valid_indices = intersecting_positions & split_indices
+        
+        if not valid_indices:
+            logger.debug(f"No valid polygons found for {unique_key} in {mode.value} split")
+            return
+            
+        # Get the subset of polygons for this image
+        image_polygons = split_data.loc[list(valid_indices)]
+        logger.info(f"Processing {len(image_polygons)} polygons for image {unique_key}")
+        
+        all_patches_for_file = []
+        
+        try:
+            with rasterio.open(image_tuple.vv_path) as vv_src, \
+                 rasterio.open(image_tuple.vh_path) as vh_src:
+                
+                logger.debug(f"Opened rasters: VV {vv_src.bounds}, VH {vh_src.bounds}")
+                
+                # Iterate over polygons and extract patches
+                for poly_idx, (idx, polygon_row) in enumerate(image_polygons.iterrows()):
+                    if (poly_idx + 1) % 50 == 0:
+                        logger.info(f"  Processing polygon {poly_idx + 1}/{len(image_polygons)}")
+                    
+                    try:
+                        patch_objects = self._extract_patches_following_workflow(
+                            polygon_row, vv_src, vh_src, image_tuple, mode, n_samples_per_polygon
+                        )
+                        
+                        if patch_objects:
+                            all_patches_for_file.extend(patch_objects)
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing polygon {idx}: {e}")
+                        continue
+                
+                # Cache all patches for this file
+                if all_patches_for_file:
+                    self._cache_patches_for_file(all_patches_for_file, mode, image_tuple)
+                    logger.info(f"Cached {len(all_patches_for_file)} patches for {unique_key}")
+                else:
+                    logger.warning(f"No patches generated for {unique_key}")
+                        
+        except Exception as e:
+            logger.error(f"Error opening raster files for {unique_key}: {e}")
+
+    def yield_patch(self, mode: DataMode, n_samples_per_polygon: int = 1) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Yield individual patches from cache. Only loads cached patches and shuffles them.
+        
+        Args:
+            mode: Data mode (train/validation/test)
+            n_samples_per_polygon: Number of samples to extract per polygon
+            
+        Yields:
+            Tuples of (patch_data, class_id) for individual patches
+        """
+        logger.info(f"Loading cached patches for {mode.value} mode")
+        
+        # Sort image tuples for consistent order
+        self.image_tuples.sort(key=lambda x: (x.date, x.vh_path, x.vv_path))
+        
+        for img_idx, image_tuple in enumerate(self.image_tuples):
+            # Check if cache exists
+            cached_patches, cached_labels = self._load_cached_patches(mode, image_tuple)
+            
+            if cached_patches is None:
+                # Cache doesn't exist, generate it
+                logger.warning(f"Cache not found for {image_tuple.date}, generating patches...")
+                self.cache_patches_for_file(mode, image_tuple, n_samples_per_polygon)
+                
+                # Try loading again after caching
+                cached_patches, cached_labels = self._load_cached_patches(mode, image_tuple)
+                if cached_patches is not None:
+                    logger.debug(f"Loaded {len(cached_patches)} newly cached patches for {image_tuple.date}")
+                else:
+                    logger.error(f"Failed to cache or load patches for {image_tuple.date}")
+
+            indices = np.random.permutation(len(cached_patches))
+
+            # Yield shuffled patches
+            for idx in indices:
+                yield cached_patches[idx], cached_labels[idx]
+
+    def yield_batch(self, mode: DataMode, n_samples_per_polygon: int = 1) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Generate batches of patches using the yield_patch method.
+        
+        This method collects individual patches from yield_patch into batches
+        and handles shuffling and batch management.
+        
+        Args:
+            mode: Data mode (train/validation/test)
+            n_samples_per_polygon: Number of samples to extract per polygon
+            
+        Yields:
+            Tuples of (patches_array, labels_array) for batches
+        """
+        logger.info(f"Starting batch generation for {mode.value} mode")
+        
+        batch_size = self.config.neural_network.batch_size
         batch_patches = []
         batch_labels = []
-        self.image_tuples.sort(key=lambda x: (x.date,x.vh_path,x.vv_path))  # Ensure consistent order
-        # Iterate over images
-        for img_idx, image_tuple in enumerate(self.image_tuples):
-            logger.debug(f"Processing image {img_idx + 1}/{len(self.image_tuples)}: {image_tuple.date}")
+        
+        # Use yield_patch to get individual patches with caching
+        patch_generator = self.yield_patch(mode, n_samples_per_polygon)
+        
+        for patch_data, class_id in patch_generator:
+            batch_patches.append(patch_data)
+            batch_labels.append(class_id)
             
-            # Load the valid AOI for this image
-            unique_key = self._generate_stable_unique_key(image_tuple)
-            
-            if unique_key not in self.tuple_aois:
-                logger.warning(f"No valid AOI found for image {unique_key}")
-                continue
+            # Yield batch when full
+            if len(batch_patches) >= batch_size:
+                # Convert to arrays
+                patches_array = np.array(batch_patches)
+                labels_array = np.array(batch_labels)
                 
-            valid_aoi = self.tuple_aois[unique_key]
-            logger.debug(f"Loaded AOI for {unique_key}: {len(valid_aoi)} geometries")
-            
-            # Validate the valid AOI again
-            if valid_aoi.geometry.iloc[0].is_empty or valid_aoi.geometry.iloc[0].area == 0:
-                logger.warning(f"AOI for {unique_key} is empty or has zero area")
-                continue
+                # Shuffle batch for training
+                indices = np.random.permutation(len(patches_array))
+                patches_array = patches_array[indices]
+                labels_array = labels_array[indices]
                 
-            aoi_geometry = valid_aoi.geometry.iloc[0]
-            logger.debug(f"AOI bounds: {aoi_geometry.bounds}")
-            
-            # Subset the loaded geodataframe to the valid AOI
-            # Get polygons that intersect with this AOI and are in the current split
-            intersecting_positions = self.polygon_image_intersections.get(unique_key, set())
-            split_indices = set(split_data.index)
-            valid_indices = intersecting_positions & split_indices
-            
-            if not valid_indices:
-                logger.debug(f"No valid polygons found for {unique_key} in {mode.value} split")
-                continue
+                logger.debug(f"Yielding batch: {patches_array.shape}")
+                yield patches_array, labels_array
                 
-            # Get the subset of polygons for this image
-            image_polygons = split_data.loc[list(valid_indices)]
-            logger.debug(f"Processing {len(image_polygons)} polygons for image {unique_key}")
-            
-            # Open raster files for this image
-            try:
-                import rasterio
-                with rasterio.open(image_tuple.vv_path) as vv_src, \
-                     rasterio.open(image_tuple.vh_path) as vh_src:
-                    
-                    logger.debug(f"Opened rasters: VV {vv_src.bounds}, VH {vh_src.bounds}")
-                    
-                    # Iterate over features (polygons)
-                    for poly_idx, (idx, polygon_row) in enumerate(image_polygons.iterrows()):
-                        logger.debug(f"Processing polygon {poly_idx + 1}/{len(image_polygons)} (index {idx})")
-                        
-                        # Follow the specified workflow for each feature
-                        try:
-                            patch_objects = self._extract_patches_following_workflow(
-                                polygon_row, vv_src, vh_src, image_tuple, mode, n_samples_per_polygon
-                            )
-                            
-                            if patch_objects:
-                                logger.debug(f"Extracted {len(patch_objects)} patches from polygon {idx}")
-                                
-                                # Add patches to cache
-                                self._add_patches_to_cache(patch_objects, mode)
-                                
-                                # Add to current batch
-                                for patch_obj in patch_objects:
-                                    batch_patches.append(patch_obj.data)
-                                    batch_labels.append(patch_obj.class_id)
-                                    
-                                    # Yield batch when full
-                                    if len(batch_patches) >= batch_size:
-                                        # Convert to arrays
-                                        patches_array = np.array(batch_patches)
-                                        labels_array = np.array(batch_labels)
-                                        
-                                        # Shuffle batch
-                                        indices = np.random.permutation(len(patches_array))
-                                        patches_array = patches_array[indices]
-                                        labels_array = labels_array[indices]
-                                        
-                                        logger.debug(f"Yielding batch: {patches_array.shape}")
-                                        yield patches_array, labels_array
-                                        
-                                        # Reset batch
-                                        batch_patches = []
-                                        batch_labels = []
-                            else:
-                                logger.debug(f"No patches extracted from polygon {idx}")
-                                
-                        except Exception as e:
-                            logger.error(f"Error processing polygon {idx}: {e}")
-                            continue
-                            
-            except Exception as e:
-                logger.error(f"Error opening raster files for {unique_key}: {e}")
-                continue
+                # Reset batch
+                batch_patches = []
+                batch_labels = []
         
         # Yield final partial batch if any patches remain
         if batch_patches:
-            logger.info(f"Final flush: {len(batch_patches)} patches for {mode.value} mode")
+            logger.info(f"Final batch: {len(batch_patches)} patches for {mode.value} mode")
             patches_array = np.array(batch_patches)
             labels_array = np.array(batch_labels)
             
             # Shuffle final batch
             indices = np.random.permutation(len(patches_array))
-            patches_array = patches_array[indices]  
+            patches_array = patches_array[indices]
             labels_array = labels_array[indices]
             
             yield patches_array, labels_array
-            
-        # Flush remaining cached patches
-        self._flush_patch_cache(mode)
         
     def _extract_patches_following_workflow(self, polygon_row: pd.Series, vv_src: rasterio.DatasetReader,
                                           vh_src: rasterio.DatasetReader, image_tuple: ImageTuple, 

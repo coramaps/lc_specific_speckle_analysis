@@ -1,0 +1,29 @@
+2025-11-27 22:54:30,834 - lc_speckle_analysis.data_config - INFO - Reading configuration from /mnt/ssddata/users/david/code/lc_specific_speckle_analysis/data/config.conf
+2025-11-27 22:54:30,836 - lc_speckle_analysis.data_config - INFO - Training data paths: ['/mnt/ssddata/PbNNMod/label_preparation/classification/crop_classification/cldef_5/Niedersachsen_2022/Niedersachsen_2022_InvekosDataset_c823cf0c.gpkg', '/mnt/ssddata/PbNNMod/label_preparation/classification/crop_classification/cldef_5/NRW_2022/NRW_2022_InvekosDataset_0fba3793.gpkg']
+2025-11-27 22:54:30,837 - lc_speckle_analysis.data_config - INFO - Column ID: cora_id
+2025-11-27 22:54:30,837 - lc_speckle_analysis.data_config - INFO - Classes: [1, 4, 6, 12]
+2025-11-27 22:54:30,837 - lc_speckle_analysis.data_config - INFO - Orbits: ['D139']
+2025-11-27 22:54:30,838 - lc_speckle_analysis.data_config - INFO - Dates: ['20220611']
+2025-11-27 22:54:30,838 - lc_speckle_analysis.data_config - INFO - File pattern: /mnt/cephfs/data/CorDAu/S1/download/preproc_1/data/UTMZ_32N/2022/{orbit}/*.tif
+2025-11-27 22:54:30,838 - lc_speckle_analysis.data_config - INFO - Processing config - Workers: 4, Memory: 2048MB, Format: npz
+2025-11-27 22:54:30,839 - lc_speckle_analysis.data_config - INFO - Patch extraction - Per feature: 50, Per area ratio: 1.0
+2025-11-27 22:54:30,839 - lc_speckle_analysis.data_config - INFO - Neural network config - Patch size: 10, Batch size: 32, Architecture: test_flat_2_layers
+2025-11-27 22:54:30,840 - lc_speckle_analysis - INFO - Training configuration loaded successfully
+2025-11-27 22:54:30,840 - lc_speckle_analysis - INFO - Auto-loaded training configuration on import
+2025-11-27 22:54:31,541 - __main__ - INFO - ================================================================================
+2025-11-27 22:54:31,541 - __main__ - INFO - 🎯 COMPREHENSIVE PATCH GENERATION STARTED
+2025-11-27 22:54:31,541 - __main__ - INFO - ================================================================================
+2025-11-27 22:54:31,541 - __main__ - INFO - Timestamp: 2025-11-27 22:54:31.541374
+2025-11-27 22:54:31,541 - __main__ - INFO - Samples per polygon: 50
+2025-11-27 22:54:31,541 - __main__ - INFO - Log file: /mnt/ssddata/users/david/code/lc_specific_speckle_analysis/patch_generation.log
+2025-11-27 22:54:31,541 - __main__ - INFO - Initializing PatchYielder...
+2025-11-27 22:54:31,541 - lc_speckle_analysis.config - INFO - PatchYielder initialized with patch size: 10
+2025-11-27 22:54:31,543 - lc_speckle_analysis.config - INFO - Target EPSG: EPSG:32632
+2025-11-27 22:54:31,545 - lc_speckle_analysis.config - INFO - Loading training data from 2 sources
+2025-11-27 22:54:31,545 - lc_speckle_analysis.config - INFO - Loading dataset 1/2: /mnt/ssddata/PbNNMod/label_preparation/classification/crop_classification/cldef_5/Niedersachsen_2022/Niedersachsen_2022_InvekosDataset_c823cf0c.gpkg
+2025-11-27 22:54:36,686 - lc_speckle_analysis.config - INFO -   Loaded 825500 polygons from Niedersachsen_2022_InvekosDataset_c823cf0c.gpkg
+2025-11-27 22:54:36,686 - lc_speckle_analysis.config - INFO - Loading dataset 2/2: /mnt/ssddata/PbNNMod/label_preparation/classification/crop_classification/cldef_5/NRW_2022/NRW_2022_InvekosDataset_0fba3793.gpkg
+2025-11-27 22:54:41,575 - lc_speckle_analysis.config - INFO -   Loaded 501548 polygons from NRW_2022_InvekosDataset_0fba3793.gpkg
+2025-11-27 22:54:41,760 - lc_speckle_analysis.config - INFO - Combined datasets: 1327048 total polygons
+2025-11-27 22:54:41,760 - lc_speckle_analysis.config - INFO - Original CRS: EPSG:25832, Final combined polygons: 1327048
+2025-11-27 22:54:41,761 - lc_speckle_analysis.config - INFO - Reprojecting from EPSG:25832 to EPSG:32632
