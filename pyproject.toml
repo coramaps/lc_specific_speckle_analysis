@@ -1,0 +1,65 @@
+[tool.poetry]
+name = "lc-specific-speckle-analysis"
+version = "0.1.0"
+description = "LC specific speckle analysis research project"
+authors = ["Gunnar <gunnar@example.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "lc_speckle_analysis", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+numpy = "^1.26.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0.0"
+pytest-cov = "^4.0.0"
+black = "^22.0.0"
+isort = "^5.10.0"
+flake8 = "^4.0.0"
+mypy = "^0.950"
+pre-commit = "^2.17.0"
+
+[tool.poetry.group.docs.dependencies]
+sphinx = "^4.4.0"
+sphinx-rtd-theme = "^1.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --cov=src --cov-report=html --cov-report=term-missing"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
