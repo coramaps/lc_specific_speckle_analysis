@@ -63,16 +63,30 @@ class ImageTuple:
 class PatchYielder:
     """Yields patches from satellite data for training/validation/testing."""
     
-    def __init__(self, config: TrainingDataConfig, seed: int = 42):
+    def __init__(self, config: TrainingDataConfig, seed: int = 42, patch_cache_size: int = 5000):
         """Initialize PatchYielder.
         
         Args:
             config: Training data configuration
             seed: Random seed for reproducible splits
+            patch_cache_size: Number of patches to accumulate before caching to disk
         """
         self.config = config
         self.seed = seed
         self.target_epsg = 'EPSG:32632'  # UTM Zone 32N
+        self.patch_cache_size = patch_cache_size
+        
+        # Initialize patch cache for each mode
+        self.patch_cache = {
+            DataMode.TRAIN: [],
+            DataMode.VALIDATION: [],
+            DataMode.TEST: []
+        }
+        self.cache_batch_counter = {
+            DataMode.TRAIN: 0,
+            DataMode.VALIDATION: 0,
+            DataMode.TEST: 0
+        }
         
         # Set random seeds for reproducibility
         random.seed(seed)
@@ -960,13 +974,19 @@ class PatchYielder:
         cache_dir = PROJECT_ROOT / "data" / "cache" / "patches" / mode.value
         cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create hash from patch metadata for cache key
-        patch_info = []
-        for patch in patches:
-            info = f"{patch.date}_{patch.orbit}_{patch.class_id}_{patch.bounds}"
-            patch_info.append(info)
+        # Create unique hash from mode, config and batch counter
+        batch_id = self.cache_batch_counter[mode]
         
-        combined_info = "_".join(sorted(patch_info))
+        cache_info = {
+            "mode": mode.value,
+            "patch_size": int(self.config.neural_network.patch_size),
+            "classes": sorted([int(c) for c in self.config.classes]),
+            "orbit": self.config.orbits[0] if self.config.orbits else "unknown",
+            "batch_id": batch_id  # Unique batch identifier
+        }
+        
+        import json
+        combined_info = json.dumps(cache_info, sort_keys=True)
         cache_hash = hashlib.md5(combined_info.encode()).hexdigest()[:8]
         hash_dir = cache_dir / cache_hash
         hash_dir.mkdir(exist_ok=True)
@@ -1019,13 +1039,32 @@ class PatchYielder:
                 json.dump(cache_metadata, f, indent=2)
             logger.info(f"Created traceability metadata: {metadata_file.name}")
         
-        # Use larger chunk size for fewer files (10,000 patches per file instead of 1,000)
-        chunk_size = 10000  # patches per file - 10x larger than before
+        # Load existing patches if any and append new ones
+        existing_patches = []
+        existing_patch_files = list(hash_dir.glob("patches_*.pkl"))
+        for patch_file in existing_patch_files:
+            try:
+                with open(patch_file, 'rb') as f:
+                    existing_patches.extend(pickle.load(f))
+            except Exception as e:
+                logger.warning(f"Could not load existing patches from {patch_file}: {e}")
         
-        for i in range(0, len(patches), chunk_size):
-            chunk = patches[i:i + chunk_size]
+        # Combine existing and new patches
+        all_patches = existing_patches + patches
+        
+        # Clear existing files to recreate with proper numbering
+        for old_file in existing_patch_files:
+            old_file.unlink()
+        for old_file in hash_dir.glob("patches_*.gpkg"):
+            old_file.unlink()
+        
+        # Use larger chunk size for fewer files (10,000 patches per file)
+        chunk_size = 10000
+        
+        for i in range(0, len(all_patches), chunk_size):
+            chunk = all_patches[i:i + chunk_size]
             n_start = i
-            n_end = min(i + chunk_size - 1, len(patches) - 1)
+            n_end = min(i + chunk_size - 1, len(all_patches) - 1)
             
             # Cache patch data as pickle
             patch_file = hash_dir / f"patches_{n_start:06d}-{n_end:06d}.pkl"
@@ -1052,11 +1091,55 @@ class PatchYielder:
                 })
             
             # Create GeoDataFrame and save as GPKG
-            gdf = gpd.GeoDataFrame(metadata, geometry=geometries, crs=patches[0].crs)
+            gdf = gpd.GeoDataFrame(metadata, geometry=geometries, crs=all_patches[0].crs)
             gpkg_file = hash_dir / f"patches_{n_start:06d}-{n_end:06d}.gpkg"
             gdf.to_file(gpkg_file, driver='GPKG')
         
-        logger.info(f"Cached {len(patches)} patches in {hash_dir} ({len(list(hash_dir.glob('*.pkl')))} files)")
+        logger.info(f"Cached {len(patches)} new patches (total: {len(all_patches)}) in {hash_dir} ({len(list(hash_dir.glob('*.pkl')))} files)")
+    
+    def _add_patches_to_cache(self, patches: List[Patch], mode: DataMode) -> None:
+        """Add patches to in-memory cache and flush to disk when cache size is reached.
+        
+        Args:
+            patches: List of Patch objects to add to cache
+            mode: Data mode (train/validation/test)
+        """
+        if not patches:
+            return
+            
+        # Add patches to in-memory cache
+        self.patch_cache[mode].extend(patches)
+        
+        # Check if cache size threshold is reached
+        if len(self.patch_cache[mode]) >= self.patch_cache_size:
+            self._flush_patch_cache(mode)
+    
+    def _flush_patch_cache(self, mode: DataMode) -> None:
+        """Flush the in-memory patch cache for a mode to disk.
+        
+        Args:
+            mode: Data mode to flush
+        """
+        if not self.patch_cache[mode]:
+            return
+            
+        logger.info(f"Flushing {len(self.patch_cache[mode])} patches to disk for {mode.value} mode")
+        
+        # Cache all patches in memory
+        self._cache_patches(self.patch_cache[mode], mode)
+        
+        # Increment batch counter for unique identifiers
+        self.cache_batch_counter[mode] += 1
+        
+        # Clear the in-memory cache
+        self.patch_cache[mode] = []
+    
+    def flush_all_caches(self) -> None:
+        """Flush all remaining patches in memory caches to disk."""
+        for mode in [DataMode.TRAIN, DataMode.VALIDATION, DataMode.TEST]:
+            if self.patch_cache[mode]:
+                logger.info(f"Final flush: {len(self.patch_cache[mode])} patches for {mode.value} mode")
+                self._flush_patch_cache(mode)
     
     def _extract_patches_to_objects(self, polygon_row: pd.Series, vv_src: rasterio.DatasetReader, 
                                    vh_src: rasterio.DatasetReader, image_tuple: ImageTuple, 
@@ -1319,9 +1402,8 @@ class PatchYielder:
                         patches = [p.data for p in patch_objects]  # Extract data for backward compatibility
                         
                         if patches:
-                            # Cache the patch objects
-                            if patch_objects:
-                                self._cache_patches(patch_objects, mode)
+                            # Add patches to cache (will flush automatically when threshold reached)
+                            self._add_patches_to_cache(patch_objects, mode)
                             
                             # Take up to n_samples_per_polygon patches
                             samples_to_take = min(len(patches), n_samples_per_polygon)
@@ -1359,6 +1441,9 @@ class PatchYielder:
                     break
         
         finally:
+            # Flush any remaining patches in cache
+            self.flush_all_caches()
+            
             # Ensure resources are cleaned up
             for vv_src, vh_src in opened_datasets.values():
                 try:

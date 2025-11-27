@@ -99,9 +99,10 @@ def main():
     logger.info(f"Loaded config with classes: {config.classes}")
     logger.info(f"Patch extraction settings - Per feature: {config.n_patches_per_feature}, Per area ratio: {config.n_patches_per_area}")
     
-    # Create patch yielder
-    logger.info("Creating PatchYielder...")
-    yielder = PatchYielder(config, seed=42)
+    # Create patch yielder with configurable cache size
+    patch_cache_size = 5000  # Cache 5000 patches before flushing to disk
+    logger.info(f"Creating PatchYielder with cache size: {patch_cache_size}")
+    yielder = PatchYielder(config, seed=42, patch_cache_size=patch_cache_size)
     
     logger.info(f"PatchYielder created successfully:")
     logger.info(f"  Image tuples: {len(yielder.image_tuples)}")
@@ -164,6 +165,10 @@ def main():
             logger.info(f"  Time: {stats['processing_time']:.1f}s")
     
     logger.info(f"\nTotal patches cached across all modes: {total_patches}")
+    
+    # Ensure all remaining patches are flushed
+    logger.info("Flushing any remaining patches in cache...")
+    yielder.flush_all_caches()
     
     # Log settings used
     logger.info(f"\nPatch extraction settings used:")
