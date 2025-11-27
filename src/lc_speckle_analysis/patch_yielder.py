@@ -108,6 +108,23 @@ class PatchYielder:
     
     def _load_training_data(self) -> None:
         """Load training data from multiple sources and reproject to target EPSG."""
+        # Create cache for the processed training data
+        cache_dir = PROJECT_ROOT / "data" / "cache"
+        cache_dir.mkdir(exist_ok=True)
+        
+        # Create cache key based on input paths, target EPSG, and classes
+        paths_hash = hashlib.md5('|'.join(sorted(self.config.train_data_paths)).encode()).hexdigest()[:8]
+        classes_hash = hashlib.md5('|'.join(map(str, sorted(self.config.classes))).encode()).hexdigest()[:4]
+        cache_key = f"processed_training_data_{paths_hash}_{classes_hash}_epsg{self.target_epsg.split(':')[1]}"
+        cache_file = cache_dir / f"{cache_key}.gpkg"
+        
+        # Try to load from cache first
+        if cache_file.exists():
+            logger.info(f"Loading processed training data from cache: {cache_file.name}")
+            self.gdf = gpd.read_file(cache_file)
+            logger.info(f"Loaded {len(self.gdf)} polygons from cache")
+            return
+        
         logger.info(f"Loading training data from {len(self.config.train_data_paths)} sources")
         
         # Load and combine multiple training datasets
@@ -146,6 +163,10 @@ class PatchYielder:
         # Log class distribution
         class_counts = self.gdf[class_col].value_counts().sort_index()
         logger.info(f"Class distribution: {dict(class_counts)}")
+        
+        # Save processed data to cache
+        logger.info(f"Caching processed training data to {cache_file.name}")
+        self.gdf.to_file(cache_file, driver='GPKG')
     
     def _split_data(self) -> None:
         """Split polygons into train/validation/test sets."""
@@ -576,7 +597,7 @@ class PatchYielder:
             logger.info(f"Applying buffering and simplification for {image_tuple.date}")
             # Apply buffering to reprojected polygon first
             aoi_buffered = self._buffer_reprojected_polygon(aoi_reprojected)
-            aoi_final = self._process_aoi_polygon(aoi_buffered, image_tuple.date)
+            aoi_final = self._process_aoi_polygon(aoi_buffered, image_tuple)
             aoi_final.to_file(final_aoi_cache, driver='GPKG')
             logger.info(f"Cached final AOI: {final_aoi_cache.name}")
         
@@ -627,7 +648,7 @@ class PatchYielder:
         # Create GeoDataFrame in original CRS
         return gpd.GeoDataFrame({'id': [1]}, geometry=[combined_polygon], crs=crs)
     
-    def _process_aoi_polygon(self, aoi: gpd.GeoDataFrame, date: str) -> gpd.GeoDataFrame:
+    def _process_aoi_polygon(self, aoi: gpd.GeoDataFrame, image_tuple: ImageTuple) -> gpd.GeoDataFrame:
         """Apply buffering and simplification to AOI polygon."""
         # Buffer outwards by 2000m to fill holes
         logger.info(f"Buffering polygon outwards by 2000m to fill holes")
@@ -639,22 +660,31 @@ class PatchYielder:
         aoi_final = aoi_buffered_out.copy()
         aoi_final.geometry = aoi_buffered_out.geometry.buffer(-5000)
         
-        # Intersect with training data bounds to ensure AOI is within training area
-        logger.info(f"Intersecting AOI with training data bounds")
+        # Intersect with actual raster bounds to ensure AOI matches raster coverage
+        logger.info(f"Intersecting AOI with actual raster bounds")
         from shapely.geometry import box
-        training_bounds = self.gdf.total_bounds  # [minx, miny, maxx, maxy]
-        training_bbox = box(training_bounds[0], training_bounds[1], training_bounds[2], training_bounds[3])
         
-        # Create GeoDataFrame for the training bounds box
-        training_bbox_gdf = gpd.GeoDataFrame({'id': [1]}, geometry=[training_bbox], crs=self.target_epsg)
+        # Get the actual raster bounds by opening the raster file
+        import rasterio
+        with rasterio.open(image_tuple.vv_path) as src:
+            raster_bounds = src.bounds
+            raster_crs = src.crs
         
-        # Intersect AOI with training bounds
-        aoi_intersected = gpd.overlay(aoi_final, training_bbox_gdf, how='intersection')
+        # Create bbox from raster bounds and reproject to target EPSG if needed
+        raster_bbox = box(raster_bounds.left, raster_bounds.bottom, raster_bounds.right, raster_bounds.top)
+        raster_bbox_gdf = gpd.GeoDataFrame({'id': [1]}, geometry=[raster_bbox], crs=raster_crs)
+        
+        # Reproject raster bbox to target EPSG if needed
+        if raster_crs != self.target_epsg:
+            raster_bbox_gdf = raster_bbox_gdf.to_crs(self.target_epsg)
+        
+        # Intersect AOI with actual raster bounds
+        aoi_intersected = gpd.overlay(aoi_final, raster_bbox_gdf, how='intersection')
         
         if len(aoi_intersected) == 0 or aoi_intersected.geometry.iloc[0].is_empty:
-            logger.warning(f"AOI for {date} does not intersect with training data bounds - skipping")
+            logger.warning(f"AOI for {image_tuple.date} does not intersect with raster bounds - skipping")
             # Return empty AOI that will be filtered out later
-            empty_geom = gpd.GeoDataFrame({'id': [1]}, geometry=[training_bbox.buffer(0)], crs=self.target_epsg)
+            empty_geom = gpd.GeoDataFrame({'id': [1]}, geometry=[raster_bbox_gdf.geometry.iloc[0].buffer(0)], crs=self.target_epsg)
             empty_geom.geometry = empty_geom.geometry.buffer(-1)  # Make it empty
             return empty_geom
         else:
@@ -668,13 +698,13 @@ class PatchYielder:
         n_intersecting = intersecting_polygons.sum()
         
         if n_intersecting < 50:
-            logger.warning(f"AOI for {date} contains only {n_intersecting} polygons (minimum 50 required) - skipping")
+            logger.warning(f"AOI for {image_tuple.date} contains only {n_intersecting} polygons (minimum 50 required) - skipping")
             # Return empty AOI that will be filtered out later  
-            empty_geom = gpd.GeoDataFrame({'id': [1]}, geometry=[training_bbox.buffer(0)], crs=self.target_epsg)
+            empty_geom = gpd.GeoDataFrame({'id': [1]}, geometry=[raster_bbox_gdf.geometry.iloc[0].buffer(0)], crs=self.target_epsg)
             empty_geom.geometry = empty_geom.geometry.buffer(-1)  # Make it empty
             return empty_geom
         else:
-            logger.info(f"AOI for {date} contains {n_intersecting} polygons (meets minimum requirement)")
+            logger.info(f"AOI for {image_tuple.date} contains {n_intersecting} polygons (meets minimum requirement)")
         
         # Check if polygon still exists after negative buffer
         if aoi_final.geometry.iloc[0].is_empty:
@@ -693,7 +723,7 @@ class PatchYielder:
         
         # Log final AOI stats
         final_area = aoi_simplified.geometry.iloc[0].area / 1e6  # Convert to km²
-        logger.info(f"Final AOI for {date}: area={final_area:.1f} km²")
+        logger.info(f"Final AOI for {image_tuple.date}: area={final_area:.1f} km²")
         
         return aoi_simplified
     
@@ -714,8 +744,9 @@ class PatchYielder:
         original_count = len(self.gdf)
         
         # Create a mapping of which polygons intersect with which image AOIs
+        # Store the intersection at the current dataframe state, then filter consistently
         self.polygon_image_intersections = {}
-        all_valid_polygon_indices = set()
+        all_valid_indices = set()
         
         for i, image_tuple in enumerate(self.image_tuples):
             # Use the same indexing scheme as in AOI creation
@@ -731,21 +762,23 @@ class PatchYielder:
             aoi = self.tuple_aois[unique_key]
             aoi_geometry = aoi.geometry[0]
             
-            # Find polygons that intersect with this specific AOI
+            # Find polygons that intersect with this specific AOI using current indices
             intersects = self.gdf.intersects(aoi_geometry)
             valid_indices = self.gdf.index[intersects].tolist()
             
             logger.info(f"AOI {unique_key}: {len(valid_indices)} intersecting polygons")
             
-            # Store the mapping for this image using unique key
+            # Store the mapping using current indices - these will remain stable
             self.polygon_image_intersections[unique_key] = set(valid_indices)
-            all_valid_polygon_indices.update(valid_indices)
+            all_valid_indices.update(valid_indices)
         
-        # Filter to only polygons that intersect with at least one AOI
-        if all_valid_polygon_indices:
-            self.gdf = self.gdf.loc[list(all_valid_polygon_indices)].copy()
+        # Filter to only polygons that intersect with at least one AOI using stable indices
+        if all_valid_indices:
+            # Filter using the indices, preserving the mapping relationship
+            self.gdf = self.gdf.loc[list(all_valid_indices)]
+            # DON'T call .copy() here to preserve the original indices
         else:
-            self.gdf = self.gdf.iloc[0:0].copy()  # Empty dataframe with same structure
+            self.gdf = self.gdf.iloc[0:0]  # Empty dataframe with same structure
         
         filtered_count = len(self.gdf)
         logger.info(f"Filtered from {original_count} to {filtered_count} polygons "
@@ -1215,10 +1248,85 @@ class PatchYielder:
         patch_size = self.config.neural_network.patch_size
         class_id = polygon_row[self.config.column_id]
         
+        # Debug logging to track polygon-image mismatch
+        polygon_index = polygon_row.name
+        image_filename = image_tuple.vv_path.name
+        logger.debug(f"Extracting patches from polygon {polygon_index} using image {image_filename}")
+        logger.debug(f"Polygon bounds: {geometry.bounds}")
+        logger.debug(f"Raster bounds: {vv_src.bounds}")
         
-        # Mask the data with polygon (crop to polygon bounds)
-        masked_vv, mask_transform = mask(vv_src, [geometry], crop=True, filled=False)
-        masked_vh, _ = mask(vh_src, [geometry], crop=True, filled=False)
+        
+        try:
+            # Mask the data with polygon (crop to polygon bounds)
+            masked_vv, mask_transform = mask(vv_src, [geometry], crop=True, filled=False)
+            masked_vh, _ = mask(vh_src, [geometry], crop=True, filled=False)
+        except ValueError as e:
+            if "Input shapes do not overlap raster" in str(e):
+                # Save detailed debugging information
+                debug_dir = PROJECT_ROOT / "data" / "cache" / "debug_overlap_errors"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Create unique debug filename with timestamp
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                debug_base = f"overlap_error_{image_tuple.date}_{timestamp}"
+                
+                # Save polygon as GPKG
+                polygon_gdf = gpd.GeoDataFrame({
+                    'class_id': [class_id],
+                    'geometry_type': [geometry.geom_type],
+                    'area': [geometry.area],
+                    'bounds_minx': [geometry.bounds[0]],
+                    'bounds_miny': [geometry.bounds[1]], 
+                    'bounds_maxx': [geometry.bounds[2]],
+                    'bounds_maxy': [geometry.bounds[3]],
+                    'image_vv': [vv_src.name],
+                    'image_vh': [vh_src.name],
+                    'data_mode': [mode.value]
+                }, geometry=[geometry], crs=str(vv_src.crs))
+                
+                polygon_file = debug_dir / f"{debug_base}_polygon.gpkg"
+                polygon_gdf.to_file(polygon_file, driver='GPKG')
+                
+                # Save raster metadata as JSON (ensure all values are JSON-serializable)
+                raster_info = {
+                    'vv_path': str(vv_src.name),
+                    'vh_path': str(vh_src.name),
+                    'raster_bounds': [float(x) for x in vv_src.bounds],
+                    'raster_crs': str(vv_src.crs),
+                    'raster_transform': [float(x) for x in vv_src.transform],
+                    'raster_shape': [int(vv_src.height), int(vv_src.width)],
+                    'polygon_bounds': [float(x) for x in geometry.bounds],
+                    'polygon_crs': str(polygon_gdf.crs),
+                    'error_message': str(e),
+                    'error_type': type(e).__name__,
+                    'timestamp': timestamp,
+                    'patch_size': int(patch_size),
+                    'class_id': int(class_id) if hasattr(class_id, 'item') else class_id
+                }
+                
+                import json
+                metadata_file = debug_dir / f"{debug_base}_metadata.json"
+                with open(metadata_file, 'w') as f:
+                    json.dump(raster_info, f, indent=2)
+                
+                # Save polygon row as pickle for complete context
+                import pickle
+                polygon_file_pkl = debug_dir / f"{debug_base}_polygon_row.pkl"
+                with open(polygon_file_pkl, 'wb') as f:
+                    pickle.dump(polygon_row, f)
+                
+                logger.error(f"Overlap error saved to debug files: {debug_base}_*")
+                logger.error(f"  Polygon: {polygon_file}")
+                logger.error(f"  Metadata: {metadata_file}")
+                logger.error(f"  Polygon row: {polygon_file_pkl}")
+                logger.error(f"  Error: {e}")
+                
+                # Now raise the error with additional context
+                raise ValueError(f"Input shapes do not overlap raster. Debug files saved: {debug_base}_*") from e
+            else:
+                # Re-raise other ValueError exceptions
+                raise
         
         # Extract patches from masked area
         patches = []
@@ -1372,14 +1480,22 @@ class PatchYielder:
                 unique_key = f"{current_tuple.date}_{time_str}_{tuple_index}"
                 intersecting_indices = self.polygon_image_intersections.get(unique_key, set())
                 
+                logger.debug(f"Processing image {unique_key}: {current_tuple.vv_path.name}")
+                logger.debug(f"Intersection mapping has {len(intersecting_indices)} polygons")
+                
                 if not intersecting_indices:
+                    logger.debug(f"No intersection mapping found for {unique_key}")
                     continue
                 
                 # Get polygons that intersect with current image and are in the current split
+                # Use index intersection to find valid polygons
                 data_indices = set(data.index)
                 valid_indices = intersecting_indices & data_indices
                 
+                logger.debug(f"Valid polygons for {unique_key}: {len(valid_indices)} out of {len(intersecting_indices)} mapped")
+                
                 if not valid_indices:
+                    logger.debug(f"No valid polygons found for {unique_key}")
                     continue
                     
                 valid_polygons = data.loc[list(valid_indices)]
@@ -1439,7 +1555,10 @@ class PatchYielder:
         
         finally:
             # Flush any remaining patches in cache
-            self.flush_all_caches()
+            try:
+                self.flush_all_caches()
+            except Exception as e:
+                logger.error(f"Error flushing caches: {e}")
             
             # Ensure resources are cleaned up
             for vv_src, vh_src in opened_datasets.values():
