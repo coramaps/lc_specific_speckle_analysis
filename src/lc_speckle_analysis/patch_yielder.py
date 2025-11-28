@@ -37,6 +37,7 @@ class DataMode(Enum):
     TEST = "test"
 
 @dataclass
+@dataclass
 class Patch:
     """Container for a single patch with metadata."""
     data: np.ndarray  # Shape: (height, width, channels)
@@ -48,6 +49,37 @@ class Patch:
     date: str  # YYYYMMDD
     class_id: int  # Class label
     data_mode: DataMode  # Data mode (train/validation/test)
+    
+    def get_data(self, zero_mean: bool = False) -> np.ndarray:
+        """
+        Get patch data with optional zero-mean normalization.
+        
+        For SAR data with VV and VH channels, zero-mean normalization 
+        subtracts the mean from each channel separately to remove 
+        absolute intensity values while preserving structural information.
+        
+        Args:
+            zero_mean: If True, subtract the mean from each channel (VV, VH) separately
+            
+        Returns:
+            numpy array with shape (height, width, channels)
+            - If zero_mean=False: returns original data
+            - If zero_mean=True: returns data with per-channel mean subtracted
+        """
+        if not zero_mean:
+            return self.data.copy()
+        
+        # Apply zero-mean normalization per channel
+        normalized_data = self.data.copy()
+        
+        # Assuming channels are in the last dimension (height, width, channels)
+        # For SAR data: typically channel 0 = VV, channel 1 = VH
+        for channel_idx in range(normalized_data.shape[2]):
+            channel_data = normalized_data[:, :, channel_idx]
+            channel_mean = np.mean(channel_data)
+            normalized_data[:, :, channel_idx] = channel_data - channel_mean
+            
+        return normalized_data
 
 @dataclass
 class ImageTuple:

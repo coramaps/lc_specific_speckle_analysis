@@ -41,17 +41,19 @@ matplotlib.use('Agg')
 class PatchDataset(Dataset):
     """PyTorch Dataset for cached patch data."""
     
-    def __init__(self, patch_yielder: PatchYielder, mode: DataMode, transform=None):
+    def __init__(self, patch_yielder: PatchYielder, mode: DataMode, config: TrainingDataConfig, transform=None):
         """
         Initialize dataset.
         
         Args:
             patch_yielder: PatchYielder instance
             mode: Data mode (train/validation/test)
+            config: Training data configuration
             transform: Optional data transforms
         """
         self.patch_yielder = patch_yielder
         self.mode = mode
+        self.config = config
         self.transform = transform
         
         # Collect all patches at initialization
@@ -80,11 +82,21 @@ class PatchDataset(Dataset):
         return len(self.patches)
     
     def __getitem__(self, idx):
-        patch = self.patches[idx]
+        patch_data = self.patches[idx]
         label = self.labels[idx]
         
+        # Apply zero-mean normalization if configured
+        if self.config.data_with_zero_mean:
+            # Apply per-channel mean subtraction for VV and VH
+            normalized_data = patch_data.copy()
+            for channel_idx in range(normalized_data.shape[2]):
+                channel_data = normalized_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                normalized_data[:, :, channel_idx] = channel_data - channel_mean
+            patch_data = normalized_data
+        
         # Convert to tensor
-        patch_tensor = torch.FloatTensor(patch)
+        patch_tensor = torch.FloatTensor(patch_data)
         label_tensor = torch.LongTensor([label])[0]
         
         # Apply transforms if any
@@ -123,6 +135,9 @@ class ModelTrainer:
         logger.info(f"Using config hash: {config_hash}")
         logger.info(f"Training output directory: {self.output_dir}")
         
+        # Save complete configuration for reconstructability
+        self._save_config_json(config, config_hash)
+        
         self.models_dir = self.output_dir / "models"
         self.plots_dir = self.output_dir / "plots"
         self.logs_dir = self.output_dir / "logs"
@@ -160,6 +175,70 @@ class ModelTrainer:
         
         logger.info(f"Model initialized with {sum(p.numel() for p in self.model.parameters()):,} parameters")
     
+    def _save_config_json(self, config: TrainingDataConfig, config_hash: str):
+        """Save complete configuration as JSON for reconstructability."""
+        from dataclasses import asdict
+        import json
+        from datetime import datetime
+        
+        # Convert config to dictionary
+        config_dict = asdict(config)
+        
+        # Add metadata for reconstructability
+        config_dict['_metadata'] = {
+            'config_hash': config_hash,
+            'generated_at': datetime.now().isoformat(),
+            'git_commit': self._get_git_commit(),
+            'python_env': self._get_python_env_info()
+        }
+        
+        # Save to JSON file
+        config_file = self.output_dir / f"config_{config_hash}.json"
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_dict, f, indent=2, default=str, ensure_ascii=False)
+        
+        logger.info(f"Configuration saved to: {config_file}")
+    
+    def _get_git_commit(self) -> str:
+        """Get current git commit hash for reproducibility."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'], 
+                capture_output=True, 
+                text=True, 
+                cwd=project_root,
+                timeout=5
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            else:
+                return "unknown"
+        except Exception:
+            return "unknown"
+    
+    def _get_python_env_info(self) -> dict:
+        """Get Python environment information for reproducibility."""
+        import sys
+        import platform
+        try:
+            import torch
+            torch_version = torch.__version__
+            cuda_available = torch.cuda.is_available()
+            cuda_version = torch.version.cuda if cuda_available else None
+        except ImportError:
+            torch_version = "unknown"
+            cuda_available = False
+            cuda_version = None
+        
+        return {
+            'python_version': sys.version,
+            'platform': platform.platform(),
+            'torch_version': torch_version,
+            'cuda_available': cuda_available,
+            'cuda_version': cuda_version
+        }
+    
     def prepare_data(self):
         """Prepare data loaders."""
         logger.info("Preparing data...")
@@ -168,8 +247,8 @@ class ModelTrainer:
         self.patch_yielder = PatchYielder(self.config)
         
         # Create datasets
-        self.train_dataset = PatchDataset(self.patch_yielder, DataMode.TRAIN)
-        self.val_dataset = PatchDataset(self.patch_yielder, DataMode.VALIDATION)
+        self.train_dataset = PatchDataset(self.patch_yielder, DataMode.TRAIN, self.config)
+        self.val_dataset = PatchDataset(self.patch_yielder, DataMode.VALIDATION, self.config)
         
         # Create data loaders
         batch_size = self.config.neural_network.batch_size
@@ -345,6 +424,8 @@ class ModelTrainer:
         # Generate final plots and reports
         self.plot_training_history()
         self.generate_classification_report()
+        
+        return best_val_acc
     
     def save_model(self, filename: str):
         """Save model checkpoint."""
@@ -463,6 +544,218 @@ class ModelTrainer:
         
         plt.close()
 
+    def evaluate_test_set(self) -> Tuple[float, float, Dict]:
+        """Evaluate model on test set."""
+        logger.info("Evaluating on test set...")
+        
+        # Create test dataset
+        test_dataset = PatchDataset(self.patch_yielder, DataMode.TEST, self.config)
+        
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=self.config.neural_network.batch_size,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True if self.device.type == 'cuda' else False
+        )
+        
+        logger.info(f"Loaded {len(test_dataset)} test patches")
+        
+        # Evaluate
+        self.model.eval()
+        total_loss = 0.0
+        correct_predictions = 0
+        total_predictions = 0
+        
+        all_predictions = []
+        all_targets = []
+        all_probabilities = []
+        
+        with torch.no_grad():
+            for data, target in test_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                
+                # Map target classes to indices
+                target_mapped = torch.zeros_like(target)
+                for i, cls in enumerate(target.cpu().numpy()):
+                    target_mapped[i] = self.class_to_idx[cls]
+                target_mapped = target_mapped.to(self.device)
+                
+                output = self.model(data)
+                loss = self.criterion(output, target_mapped)
+                
+                total_loss += loss.item()
+                
+                pred = output.argmax(dim=1)
+                correct_predictions += pred.eq(target_mapped).sum().item()
+                total_predictions += target.size(0)
+                
+                # Store predictions and probabilities
+                probabilities = torch.softmax(output, dim=1)
+                all_predictions.extend(pred.cpu().numpy())
+                all_targets.extend(target.cpu().numpy())
+                all_probabilities.extend(probabilities.cpu().numpy())
+        
+        avg_loss = total_loss / len(test_loader)
+        accuracy = correct_predictions / total_predictions
+        
+        logger.info(f"Test Results: Loss={avg_loss:.6f}, Accuracy={accuracy:.4f}")
+        
+        # Calculate detailed metrics
+        test_metrics = {
+            'predictions': all_predictions,
+            'targets': all_targets,
+            'probabilities': all_probabilities,
+            'accuracy': accuracy,
+            'loss': avg_loss
+        }
+        
+        return avg_loss, accuracy, test_metrics
+
+    def generate_test_report(self, test_metrics: Dict):
+        """Generate detailed test set report."""
+        predictions = test_metrics['predictions']
+        targets = test_metrics['targets']
+        probabilities = np.array(test_metrics['probabilities'])
+        
+        # Map indices back to original class labels
+        pred_labels = [self.idx_to_class[idx] for idx in predictions]
+        target_labels = targets
+        
+        # Classification report
+        class_names = [str(cls) for cls in self.config.classes]
+        report = classification_report(
+            target_labels, pred_labels,
+            labels=self.config.classes,
+            target_names=class_names,
+            output_dict=True
+        )
+        
+        # Save detailed test report
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        test_report_path = self.logs_dir / f"test_classification_report_{timestamp}.json"
+        
+        with open(test_report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        logger.info(f"Test classification report saved to: {test_report_path}")
+        
+        # Test confusion matrix
+        cm = confusion_matrix(target_labels, pred_labels, labels=self.config.classes)
+        
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Oranges',
+                   xticklabels=class_names, yticklabels=class_names)
+        plt.title('Test Set Confusion Matrix')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        
+        test_cm_path = self.plots_dir / f"test_confusion_matrix_{timestamp}.png"
+        plt.savefig(test_cm_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Test confusion matrix saved to: {test_cm_path}")
+        plt.close()
+        
+        return report
+
+    def save_training_summary(self, best_val_acc: float, test_metrics: Dict, test_report: Dict):
+        """Save comprehensive training summary."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Get git information
+        try:
+            import subprocess
+            git_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=project_root).decode().strip()
+            git_branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=project_root).decode().strip()
+            git_status = subprocess.check_output(['git', 'status', '--porcelain'], cwd=project_root).decode().strip()
+            git_dirty = len(git_status) > 0
+        except:
+            git_commit = "unknown"
+            git_branch = "unknown"
+            git_dirty = True
+        
+        # Create comprehensive summary
+        summary = {
+            "metadata": {
+                "timestamp": timestamp,
+                "config_hash": self.config_hash,
+                "git_commit": git_commit,
+                "git_branch": git_branch,
+                "git_dirty": git_dirty,
+                "training_duration_seconds": getattr(self, 'training_duration', None)
+            },
+            "configuration": {
+                "classes": self.config.classes,
+                "patch_size": self.config.neural_network.patch_size,
+                "batch_size": self.config.neural_network.batch_size,
+                "architecture": self.config.neural_network.network_architecture_id,
+                "optimizer": self.config.neural_network.optimizer,
+                "learning_rate": self.config.neural_network.learning_rate,
+                "n_epochs": self.config.neural_network.n_epochs,
+                "early_stopping_patience": self.config.neural_network.early_stopping_patience,
+                "data_with_zero_mean": self.config.data_with_zero_mean,
+                "orbits": self.config.orbits,
+                "dates": self.config.dates
+            },
+            "training_results": {
+                "epochs_completed": len(self.history['train_loss']),
+                "best_validation_accuracy": best_val_acc,
+                "final_train_loss": self.history['train_loss'][-1] if self.history['train_loss'] else None,
+                "final_val_loss": self.history['val_loss'][-1] if self.history['val_loss'] else None,
+                "final_train_accuracy": self.history['train_acc'][-1] if self.history['train_acc'] else None,
+                "final_val_accuracy": self.history['val_acc'][-1] if self.history['val_acc'] else None
+            },
+            "test_results": {
+                "test_accuracy": test_metrics['accuracy'],
+                "test_loss": test_metrics['loss'],
+                "per_class_metrics": {
+                    str(cls): {
+                        "precision": test_report[str(cls)]["precision"],
+                        "recall": test_report[str(cls)]["recall"],
+                        "f1_score": test_report[str(cls)]["f1-score"],
+                        "support": test_report[str(cls)]["support"]
+                    }
+                    for cls in self.config.classes if str(cls) in test_report
+                },
+                "macro_avg": test_report.get("macro avg", {}),
+                "weighted_avg": test_report.get("weighted avg", {})
+            },
+            "data_info": {
+                "train_samples": len(self.train_loader.dataset),
+                "validation_samples": len(self.val_loader.dataset),
+                "test_samples": len(test_metrics['predictions']),
+                "train_batches": len(self.train_loader),
+                "validation_batches": len(self.val_loader)
+            }
+        }
+        
+        # Save summary
+        summary_path = self.output_dir / f"training_summary_{timestamp}.json"
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        logger.info(f"Training summary saved to: {summary_path}")
+        
+        # Also save a simple summary file with key metrics
+        simple_summary_path = self.output_dir / "latest_results.txt"
+        with open(simple_summary_path, 'w') as f:
+            f.write(f"Training Summary - {timestamp}\n")
+            f.write(f"Config Hash: {self.config_hash}\n")
+            f.write(f"Architecture: {self.config.neural_network.network_architecture_id}\n")
+            f.write(f"Zero Mean: {self.config.data_with_zero_mean}\n")
+            f.write(f"Epochs: {len(self.history['train_loss'])}\n")
+            f.write(f"Best Validation Accuracy: {best_val_acc:.4f}\n")
+            f.write(f"Test Accuracy: {test_metrics['accuracy']:.4f}\n")
+            f.write(f"Test Loss: {test_metrics['loss']:.6f}\n")
+            f.write(f"\nPer-Class Test Results:\n")
+            for cls in self.config.classes:
+                if str(cls) in test_report:
+                    metrics = test_report[str(cls)]
+                    f.write(f"  Class {cls}: P={metrics['precision']:.3f}, R={metrics['recall']:.3f}, F1={metrics['f1-score']:.3f}\n")
+        
+        logger.info(f"Simple summary saved to: {simple_summary_path}")
+        
+        return summary_path
+
 
 def main():
     """Main training function."""
@@ -488,9 +781,23 @@ def main():
         trainer.prepare_data()
         
         # Train model
-        trainer.train(save_best=True)
+        training_start = time.time()
+        best_val_acc = trainer.train(save_best=True)
+        trainer.training_duration = time.time() - training_start
         
-        logger.info("✅ Training completed successfully!")
+        # Evaluate on test set
+        logger.info("Starting test set evaluation...")
+        test_loss, test_acc, test_metrics = trainer.evaluate_test_set()
+        
+        # Generate test report
+        test_report = trainer.generate_test_report(test_metrics)
+        
+        # Save comprehensive summary
+        summary_path = trainer.save_training_summary(best_val_acc, test_metrics, test_report)
+        
+        logger.info("✅ Training and evaluation completed successfully!")
+        logger.info(f"📊 Summary saved to: {summary_path}")
+        logger.info(f"🎯 Final Results: Val Acc={best_val_acc:.4f}, Test Acc={test_acc:.4f}")
         
     except Exception as e:
         logger.error(f"❌ Training failed: {e}")
