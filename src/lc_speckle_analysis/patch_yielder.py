@@ -883,119 +883,6 @@ class PatchYielder:
         
         logger.info(f"Final polygon count for global processing: {len(self.gdf)}")
     
-    def _extract_patches_from_polygon(self, polygon_row: pd.Series, vv_src: rasterio.DatasetReader, 
-                                    vh_src: rasterio.DatasetReader) -> List[np.ndarray]:
-        """Extract patches from a polygon area using proper inward buffering workflow.
-        
-        Workflow:
-        1. Load masked array on UNBUFFERED polygon (array_1)
-        2. Create copy and buffer nan-values inward by patch_width/2 pixels (array_2)
-        3. Valid pixels in array_2 are potential centroids (ensures 100% valid patches)
-        4. Sample centroids using farthest-point sampling
-        5. Extract patches from array_1 using these centroids
-        
-        Args:
-            polygon_row: Row from GeoDataFrame containing polygon
-            vv_src: VV polarization raster dataset reader
-            vh_src: VH polarization raster dataset reader
-            
-        Returns:
-            List of patches as numpy arrays
-        """
-        geometry = polygon_row.geometry
-        patch_size = self.config.neural_network.patch_size
-        half_patch = patch_size // 2
-        
-        try:
-            # Step 1: Load masked array on UNBUFFERED polygon (array_1)
-            masked_vv, mask_transform = mask(vv_src, [geometry], crop=True, filled=False)
-            masked_vh, _ = mask(vh_src, [geometry], crop=True, filled=False)
-            
-        except Exception as e:
-            logger.warning(f"Failed to mask polygon: {e}")
-            return []
-        
-        # Remove band dimension
-        array_1_vv = masked_vv[0]  
-        array_1_vh = masked_vh[0]
-        
-        # Step 2: Create array_2 - buffer nan-values inward by patch_width/2 pixels
-        # Find valid (non-masked, non-NaN, non-zero) areas in array_1
-        valid_mask_1 = (~array_1_vv.mask & ~array_1_vh.mask & 
-                       ~np.isnan(array_1_vv) & ~np.isnan(array_1_vh) &
-                       (array_1_vv != 0) & (array_1_vh != 0))
-        
-        if not np.any(valid_mask_1):
-            return []
-        
-        # Create structuring element for erosion (disk-like for patch_width/2)
-        # Use binary erosion to shrink valid area inward by half_patch pixels
-        structure = np.ones((2 * half_patch + 1, 2 * half_patch + 1))
-        valid_mask_2 = binary_erosion(valid_mask_1, structure=structure)
-        
-        if not np.any(valid_mask_2):
-            return []
-        
-        # Step 3: Get potential centroid coordinates from array_2
-        potential_centroids = np.column_stack(np.where(valid_mask_2))
-        
-        if len(potential_centroids) == 0:
-            return []
-        
-        # Step 4: Calculate how many patches we need
-        max_patches = self._calculate_max_patches_for_polygon(geometry, patch_size)
-        max_patches = min(max_patches, len(potential_centroids))
-        
-        if max_patches == 0:
-            return []
-        
-        # Step 5: Sample centroids using farthest-point sampling
-        if max_patches >= len(potential_centroids):
-            selected_centroids = potential_centroids
-        else:
-            selected_centroids = self._farthest_point_sampling(potential_centroids, max_patches)
-        
-        # Step 6: Extract patches from array_1 using selected centroids
-        patches = []
-        
-        for centroid in selected_centroids:
-            center_y, center_x = centroid
-            
-            # Extract patch from array_1 around this centroid
-            y_start = center_y - half_patch
-            y_end = center_y + half_patch + 1
-            x_start = center_x - half_patch
-            x_end = center_x + half_patch + 1
-            
-            # Safety check (should not happen with proper erosion)
-            if (y_start < 0 or y_end > array_1_vv.shape[0] or 
-                x_start < 0 or x_end > array_1_vv.shape[1]):
-                continue
-            
-            # Extract patch
-            patch_vv = array_1_vv[y_start:y_end, x_start:x_end]
-            patch_vh = array_1_vh[y_start:y_end, x_start:x_end]
-            
-            # Ensure exact size
-            if patch_vv.shape != (patch_size, patch_size) or patch_vh.shape != (patch_size, patch_size):
-                continue
-            
-            # Convert masked arrays to regular arrays
-            # Since we used proper erosion, all pixels should be valid
-            patch_vv_data = np.ma.filled(patch_vv, fill_value=0)
-            patch_vh_data = np.ma.filled(patch_vh, fill_value=0)
-            
-            # Final validity check (should be 100% valid due to erosion)
-            if np.any(patch_vv.mask) or np.any(patch_vh.mask):
-                logger.warning("Found masked pixels in patch despite erosion - this should not happen")
-                continue
-            
-            # Stack VV and VH as channels
-            patch = np.stack([patch_vv_data, patch_vh_data], axis=-1)
-            patches.append(patch)
-        
-        return patches
-    
     def _farthest_point_sampling(self, points: np.ndarray, n_samples: int) -> np.ndarray:
         """Sample points using farthest-point sampling algorithm.
         
@@ -1142,9 +1029,7 @@ class PatchYielder:
                 return None
         else:
             return None
-    
-
-                
+        
     
     def cache_patches_for_file(self, mode: DataMode, image_tuple: ImageTuple) -> None:
         """
