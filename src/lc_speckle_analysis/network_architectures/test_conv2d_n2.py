@@ -18,12 +18,12 @@ class TestConv2D_N2(nn.Module):
     
     Architecture:
     - Input: 2 channels (VV, VH) × 10×10 patches
-    - Conv1: 2→16 channels, 3×3 kernel
-    - Conv2: 16→32 channels, 3×3 kernel  
+    - Conv1: 2→8 channels, 3×3 kernel
+    - Conv2: 8→16 channels, 3×3 kernel  
     - Global Average Pooling
-    - FC: 32→num_classes
+    - FC: 16→num_classes
     
-    Total parameters: ~1,436
+    Total parameters: ~1,400
     """
     
     def __init__(self, num_classes: int = 4, dropout_rate: float = 0.2):
@@ -40,12 +40,12 @@ class TestConv2D_N2(nn.Module):
         self.dropout_rate = dropout_rate
         
         # Convolutional layers
-        self.conv1 = nn.Conv2d(2, 16, kernel_size=3, padding=1)  # 2*3*3*16 + 16 = 304 params
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)  # 16*3*3*32 + 32 = 4,640 params
+        self.conv1 = nn.Conv2d(2, 8, kernel_size=3, padding=1)   # 2*3*3*8 + 8 = 152 params
+        self.conv2 = nn.Conv2d(8, 16, kernel_size=3, padding=1)  # 8*3*3*16 + 16 = 1,168 params
         
         # Batch normalization
-        self.bn1 = nn.BatchNorm2d(16)  # 16*2 = 32 params
-        self.bn2 = nn.BatchNorm2d(32)  # 32*2 = 64 params
+        self.bn1 = nn.BatchNorm2d(8)   # 8*2 = 16 params
+        self.bn2 = nn.BatchNorm2d(16)  # 16*2 = 32 params
         
         # Global average pooling (no parameters)
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
@@ -54,16 +54,16 @@ class TestConv2D_N2(nn.Module):
         self.dropout = nn.Dropout(dropout_rate)
         
         # Fully connected layer
-        self.fc = nn.Linear(32, num_classes)  # 32*num_classes + num_classes params
+        self.fc = nn.Linear(16, num_classes)  # 16*num_classes + num_classes params
         
         # Calculate total parameters
-        total_params = 304 + 4640 + 32 + 64 + (32 * num_classes + num_classes)
+        total_params = 152 + 1168 + 16 + 32 + (16 * num_classes + num_classes)
         
         logger.info(f"TestConv2D_N2 network initialized:")
         logger.info(f"  Input size: 2×10×10")
-        logger.info(f"  Conv layers: 2→16→32 channels")
+        logger.info(f"  Conv layers: 2→8→16 channels")
         logger.info(f"  Kernel size: 3×3 with padding=1")
-        logger.info(f"  Global average pooling: 32×H×W → 32×1×1")
+        logger.info(f"  Global average pooling: 16×H×W → 16×1×1")
         logger.info(f"  Output classes: {num_classes}")
         logger.info(f"  Dropout rate: {dropout_rate}")
         logger.info(f"  Total parameters: {total_params:,}")
@@ -87,18 +87,18 @@ class TestConv2D_N2(nn.Module):
                 raise ValueError(f"Unexpected input shape: {x.shape}. Expected (B,C,H,W) or (B,H,W,C)")
         
         # First convolutional block
-        x = self.conv1(x)  # (batch, 16, 10, 10)
+        x = self.conv1(x)  # (batch, 8, 10, 10)
         x = self.bn1(x)
         x = F.relu(x)
         
         # Second convolutional block
-        x = self.conv2(x)  # (batch, 32, 10, 10)
+        x = self.conv2(x)  # (batch, 16, 10, 10)
         x = self.bn2(x)
         x = F.relu(x)
         
         # Global average pooling
-        x = self.global_avg_pool(x)  # (batch, 32, 1, 1)
-        x = x.view(x.size(0), -1)    # (batch, 32)
+        x = self.global_avg_pool(x)  # (batch, 16, 1, 1)
+        x = x.view(x.size(0), -1)    # (batch, 16)
         
         # Dropout and final classification
         x = self.dropout(x)
