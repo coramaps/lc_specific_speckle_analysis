@@ -7,6 +7,7 @@ Trains on cached patch data with live validation monitoring.
 import sys
 import logging
 import time
+import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import json
@@ -30,6 +31,7 @@ sys.path.insert(0, str(project_root))
 from .data_config import TrainingDataConfig
 from .network_architectures.test_flat_2_layers import TestFlat2Layers
 from .network_architectures.test_conv2d import TestConv2D
+from .network_architectures.test_conv2d_n2 import TestConv2D_N2
 from .patch_yielder import PatchYielder, DataMode
 
 # Set up logging
@@ -75,6 +77,10 @@ class PatchDataset(Dataset):
         # Apply class balancing if configured
         if self.config.equal_class_dist:
             self._balance_class_distribution()
+        
+        # Apply label shuffling if configured (for data leak testing and random baseline)
+        if self.config.shuffle_labels:
+            self._shuffle_labels()
         
         # Convert to numpy arrays for efficiency
         self.patches = np.array(self.patches)
@@ -174,18 +180,58 @@ class PatchDataset(Dataset):
         unique_classes, counts = np.unique(self.labels, return_counts=True)
         balanced_class_counts = dict(zip(unique_classes, counts))
         logger.info(f"Balanced class distribution: {balanced_class_counts}")
+    
+    def _shuffle_labels(self):
+        """
+        Randomly shuffle labels to break patch-label associations.
+        
+        This is used for:
+        1. Data leak testing - to verify no information leaks through patch geometry/structure
+        2. Random baseline establishment - to see performance with completely random labels
+        
+        The shuffling maintains the original class distribution but randomizes
+        which patches get which labels, effectively creating a random dataset.
+        """
+        if not self.patches or not self.labels:
+            return
+        
+        # Store original distribution for verification
+        unique_classes, counts = np.unique(self.labels, return_counts=True)
+        original_class_counts = dict(zip(unique_classes, counts))
+        logger.info(f"Original class distribution before shuffling: {original_class_counts}")
+        
+        # Shuffle labels randomly while maintaining the same array length
+        shuffled_labels = np.array(self.labels).copy()
+        np.random.shuffle(shuffled_labels)
+        
+        # Replace labels with shuffled version
+        self.labels = shuffled_labels.tolist()
+        
+        # Verify distribution is maintained
+        unique_classes_after, counts_after = np.unique(self.labels, return_counts=True)
+        shuffled_class_counts = dict(zip(unique_classes_after, counts_after))
+        
+        logger.info(f"Class distribution after label shuffling: {shuffled_class_counts}")
+        logger.warning("⚠️  LABELS HAVE BEEN RANDOMLY SHUFFLED - This is for data leak testing or random baseline!")
+        
+        # Verify the distributions match
+        if original_class_counts != shuffled_class_counts:
+            logger.error("Label shuffling changed class distribution - this should not happen!")
+        else:
+            logger.info("✓ Class distribution preserved during label shuffling")
 
 
 class ModelTrainer:
     """Training manager for TestFlat2Layers model."""
     
-    def __init__(self, config: TrainingDataConfig, device: str = 'auto'):
+    def __init__(self, config: TrainingDataConfig, device: str = 'auto', run_id: str = None):
         """
         Initialize trainer.
         
         Args:
             config: Training configuration
             device: Device to use ('auto', 'cpu', 'cuda')
+            run_id: Custom run ID (if None, uses config hash)
         """
         self.config = config
         
@@ -199,10 +245,18 @@ class ModelTrainer:
         
         # Create output directories with config hash to prevent conflicts
         self.config_hash = config.get_config_hash()
-        self.output_dir = project_root / "data" / "training_output" / f"run_{self.config_hash}"
+        
+        if run_id:
+            self.run_id = f"{run_id}_{self.config_hash}"
+            self.output_dir = project_root / "data" / "training_output" / f"run_{self.run_id}"
+        else:
+            self.run_id = self.config_hash
+            self.output_dir = project_root / "data" / "training_output" / f"run_{self.config_hash}"
+        
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"Using config hash: {self.config_hash}")
+        logger.info(f"Using run ID: {self.run_id}")
         logger.info(f"Training output directory: {self.output_dir}")
         
         # Save complete configuration for reconstructability
@@ -260,6 +314,12 @@ class ModelTrainer:
             return TestFlat2Layers(config)
         elif architecture_id == 'test_conv2d':
             return TestConv2D(config)
+        elif architecture_id == 'test_conv2d_n2':
+            return TestConv2D_N2(
+                patch_size=config.neural_network.patch_size,
+                num_classes=len(config.classes),
+                dropout_rate=config.neural_network.dropout_rate
+            )
         else:
             logger.warning(f"Unknown architecture '{architecture_id}', defaulting to test_flat_2_layers")
             return TestFlat2Layers(config)
@@ -269,7 +329,15 @@ class ModelTrainer:
         try:
             # Create sample input tensor
             patch_size = config.neural_network.patch_size
-            sample_input = torch.randn(1, patch_size, patch_size, 2).to(self.device)
+            
+            # For convolutional networks: (batch, channels, height, width)
+            # For flat networks: (batch, features)
+            arch_id = config.neural_network.network_architecture_id.lower()
+            if arch_id in ['test_conv2d', 'test_conv2d_n2']:
+                sample_input = torch.randn(1, 2, patch_size, patch_size).to(self.device)
+            else:
+                # For flat layers: flattened input
+                sample_input = torch.randn(1, patch_size * patch_size * 2).to(self.device)
             
             # Get model output for visualization
             self.model.eval()
@@ -299,8 +367,9 @@ class ModelTrainer:
                 # Capture torchsummary output
                 f = io.StringIO()
                 with redirect_stdout(f):
-                    if config.neural_network.network_architecture_id.lower() == 'test_conv2d':
-                        # For Conv2D: input is (batch, channels, height, width)
+                    arch_id = config.neural_network.network_architecture_id.lower()
+                    if arch_id in ['test_conv2d', 'test_conv2d_n2']:
+                        # For Conv2D architectures: input is (batch, channels, height, width)
                         torchsummary.summary(self.model, (2, patch_size, patch_size), device=str(self.device))
                     else:
                         # For flat layers: input is flattened
@@ -927,11 +996,24 @@ class ModelTrainer:
 def main():
     """Main training function."""
     try:
+        # Parse command line arguments
+        parser = argparse.ArgumentParser(description='Train TestConv2D network on patch data')
+        parser.add_argument('--config', type=str, default=None,
+                           help='Path to configuration file (default: data/config.conf)')
+        parser.add_argument('--run-id', type=str, default=None,
+                           help='Custom run ID for this training session')
+        args = parser.parse_args()
+        
         logger.info("Starting TestFlat2Layers training script...")
         
         # Load configuration
-        config_path = project_root / "data" / "config.conf"
+        if args.config:
+            config_path = Path(args.config)
+        else:
+            config_path = project_root / "data" / "config.conf"
+        
         config = TrainingDataConfig.from_file(config_path)
+        logger.info(f"Using configuration from: {config_path}")
         
         # Log configuration
         logger.info("Training Configuration:")
@@ -942,7 +1024,7 @@ def main():
         logger.info(f"  Optimizer: {config.neural_network.optimizer}")
         
         # Create trainer
-        trainer = ModelTrainer(config)
+        trainer = ModelTrainer(config, run_id=args.run_id)
         
         # Prepare data
         trainer.prepare_data()
