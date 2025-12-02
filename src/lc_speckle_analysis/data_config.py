@@ -11,7 +11,50 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _convert_modus_to_modular(modus: str) -> 'DataProcessingConfig':
+    """Convert legacy modus to new modular data processing configuration.
+    
+    Args:
+        modus: Legacy modus string
+        
+    Returns:
+        DataProcessingConfig instance
+    """
+    modus_mapping = {
+        'raw': {'shuffled': False, 'zero_mean': False, 'normalized': False, 'quantiles': False, 'aggregation': None},
+        'data_with_zero_mean': {'shuffled': False, 'zero_mean': True, 'normalized': False, 'quantiles': False, 'aggregation': None},
+        'quantiles': {'shuffled': False, 'zero_mean': False, 'normalized': False, 'quantiles': True, 'aggregation': None},
+        'spatial_shuffle': {'shuffled': True, 'zero_mean': False, 'normalized': False, 'quantiles': False, 'aggregation': None},
+        'spatial_shuffle_0mean': {'shuffled': True, 'zero_mean': True, 'normalized': False, 'quantiles': False, 'aggregation': None},
+        'std': {'shuffled': False, 'zero_mean': False, 'normalized': False, 'quantiles': False, 'aggregation': 'std'},
+        'mean': {'shuffled': False, 'zero_mean': False, 'normalized': False, 'quantiles': False, 'aggregation': 'mean'},
+        'meanandstd': {'shuffled': False, 'zero_mean': False, 'normalized': False, 'quantiles': False, 'aggregation': 'stdandmean'}
+    }
+    
+    if modus not in modus_mapping:
+        raise ValueError(f"Unknown modus: {modus}")
+    
+    config = modus_mapping[modus]
+    return DataProcessingConfig(**config)
+
+
 @dataclass
+class DataProcessingConfig:
+    """Configuration for modular data processing pipeline."""
+    shuffled: bool = False  # Apply spatial shuffling (pixels spatially shuffled, both channels in same order)
+    zero_mean: bool = False  # Subtract mean per patch and channel (zero-center each patch)
+    normalized: bool = False  # Normalize pixels to std=1
+    quantiles: bool = False  # Convert pixels to quantiles
+    aggregation: Optional[str] = None  # None (10x10 input), 'std', 'mean', 'stdandmean'
+    
+    def __post_init__(self):
+        """Validate aggregation parameter."""
+        valid_aggregations = [None, 'std', 'mean', 'stdandmean']
+        if self.aggregation not in valid_aggregations:
+            raise ValueError(f"Invalid aggregation '{self.aggregation}'. Must be one of {valid_aggregations}")
+
+
+@dataclass 
 class NeuralNetworkConfig:
     """Configuration for neural network parameters."""
     patch_size: int
@@ -41,14 +84,19 @@ class TrainingDataConfig:
     n_patches_per_feature: int
     n_patches_per_area: float
     neural_network: NeuralNetworkConfig
-    modus: str = "raw"  # 'data_with_zero_mean', 'raw', 'quantiles', or 'spatial_shuffle'
+    data_processing: DataProcessingConfig
     equal_class_dist: bool = False
     shuffle_labels: bool = False
+    
+    # Legacy support - will be deprecated
+    modus: Optional[str] = None
     
     @property
     def data_with_zero_mean(self) -> bool:
         """Backward compatibility property."""
-        return self.modus == "data_with_zero_mean"
+        if self.modus:
+            return self.modus == "data_with_zero_mean"
+        return self.data_processing.normalized  # New system: normalized means std=1
 
     @classmethod
     def from_file(cls, config_path: Path) -> "TrainingDataConfig":
@@ -109,17 +157,49 @@ class TrainingDataConfig:
         
         classes = [int(x.strip()) for x in classes_str.split(',')]
         
-        # Parse data preprocessing options with defaults
-        # Handle both new 'modus' parameter and legacy 'data_with_zero_mean' boolean
-        if 'modus' in train_section:
+        # Parse data preprocessing options with new modular system
+        data_processing_config = None
+        modus = None  # For legacy support
+        
+        # Check for new modular data processing configuration
+        if 'data_processing' in config:
+            dp_section = config['data_processing']
+            shuffled = dp_section.getboolean('shuffled', False)
+            zero_mean = dp_section.getboolean('zero_mean', False)
+            normalized = dp_section.getboolean('normalized', False)
+            quantiles = dp_section.getboolean('quantiles', False)
+            aggregation = dp_section.get('aggregation', None)
+            if aggregation and aggregation.strip().lower() in ['none', '']:
+                aggregation = None
+            elif aggregation is not None and aggregation.strip() == '':
+                aggregation = None
+            
+            data_processing_config = DataProcessingConfig(
+                shuffled=shuffled,
+                zero_mean=zero_mean,
+                normalized=normalized,
+                quantiles=quantiles,
+                aggregation=aggregation
+            )
+            logger.info(f"Data processing config: shuffled={shuffled}, zero_mean={zero_mean}, normalized={normalized}, quantiles={quantiles}, aggregation={aggregation}")
+            
+        # Legacy modus support (will be deprecated)
+        elif 'modus' in train_section:
             modus = train_section.get('modus', 'raw').strip()
             valid_modus = ['data_with_zero_mean', 'raw', 'quantiles', 'spatial_shuffle', 'meanandstd', 'std', 'mean', 'spatial_shuffle_0mean']
             if modus not in valid_modus:
                 raise ValueError(f"Invalid modus '{modus}'. Must be one of {valid_modus}")
+            
+            # Convert legacy modus to new modular system
+            data_processing_config = _convert_modus_to_modular(modus)
+            logger.info(f"Legacy modus '{modus}' converted to modular system")
+            
         else:
             # Backward compatibility: convert boolean to modus string
             data_with_zero_mean_legacy = train_section.getboolean('data_with_zero_mean', False)
             modus = "data_with_zero_mean" if data_with_zero_mean_legacy else "raw"
+            data_processing_config = _convert_modus_to_modular(modus)
+            logger.info(f"Legacy data_with_zero_mean={data_with_zero_mean_legacy} converted to modular system")
         
         equal_class_dist = train_section.getboolean('equal_class_dist', False)
         shuffle_labels = train_section.getboolean('shuffle_labels', False)
@@ -218,7 +298,8 @@ class TrainingDataConfig:
             n_patches_per_feature=n_patches_per_feature,
             n_patches_per_area=n_patches_per_area,
             neural_network=neural_network_config,
-            modus=modus,
+            data_processing=data_processing_config,
+            modus=modus,  # Keep for legacy logging/debugging
             equal_class_dist=equal_class_dist,
             shuffle_labels=shuffle_labels
         )

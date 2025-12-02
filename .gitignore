@@ -135,3 +135,5 @@ data/processed/*
 Thumbs.db
 Niedersachsen_2022_InvekosDataset_c823cf0c.gpkg
 nohup.out
+
+old*

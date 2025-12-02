@@ -102,8 +102,8 @@ class PatchDataset(Dataset):
         patch_data = self.patches[idx]
         label = self.labels[idx]
         
-        # Apply data processing based on modus
-        processed_data = self._apply_data_processing(patch_data, self.config.modus)
+        # Apply modular data processing pipeline
+        processed_data = self._apply_modular_processing(patch_data)
         
         # Convert to tensor
         patch_tensor = torch.FloatTensor(processed_data)
@@ -115,140 +115,44 @@ class PatchDataset(Dataset):
         
         return patch_tensor, label_tensor
     
-    def _apply_data_processing(self, patch_data: np.ndarray, modus: str) -> np.ndarray:
+    def _apply_modular_processing(self, patch_data: np.ndarray) -> np.ndarray:
         """
-        Apply data processing based on modus.
+        Apply modular data processing pipeline.
         
         Args:
             patch_data: Raw patch data with shape (height, width, channels)
-            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', 'spatial_shuffle', 'meanandstd', or 'std'
             
         Returns:
-            Processed patch data. For 'meanandstd' returns 1D array of shape (4,) with [mean_VV, std_VV, mean_VH, std_VH].
-            For 'std' returns 1D array of shape (2,) with [std_VV, std_VH]
+            Processed patch data. Shape depends on processing configuration.
         """
-        processed_data = patch_data.copy()
+        from .modular_processing import process_patch
         
-        if modus == "raw":
-            return processed_data
-            
-        elif modus == "data_with_zero_mean":
-            # Apply zero-mean normalization per channel (VV and VH)
-            for channel_idx in range(processed_data.shape[2]):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                processed_data[:, :, channel_idx] = channel_data - channel_mean
-            return processed_data
-            
-        elif modus == "quantiles":
-            # Transform each patch to quantiles (0.00, 0.01, ..., 1.00)
-            # This discards spectral information and tests spatial structure benefit
-            from scipy.stats import rankdata
-            
-            for channel_idx in range(processed_data.shape[2]):
-                channel_data = processed_data[:, :, channel_idx]
-                flat_data = channel_data.flatten()
-                
-                # Use scipy.stats.rankdata to get ranks, then normalize to [0,1]
-                ranks = rankdata(flat_data, method='average')  # Handles ties properly
-                quantile_data = (ranks - 1) / (len(flat_data) - 1)  # Normalize to [0,1]
-                
-                processed_data[:, :, channel_idx] = quantile_data.reshape(channel_data.shape)
-            return processed_data
-            
-        elif modus == "spatial_shuffle":
-            # Shuffle pixels within each patch (same indices for VV and VH)
-            # This tests spectral information without spatial structure
-            height, width, channels = processed_data.shape
-            n_pixels = height * width
-            
-            # Generate random permutation for pixel positions (deterministic per patch)
-            # Use patch data as seed for reproducible but different shuffling per patch
-            patch_seed = int(np.sum(patch_data) * 1000) % (2**31)  # Convert to valid seed
-            np.random.seed(patch_seed)
-            perm_indices = np.random.permutation(n_pixels)
-            
-            # Apply same shuffling to all channels
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                flat_data = channel_data.flatten()
-                shuffled_data = flat_data[perm_indices]
-                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
-                
-            return processed_data
-            
-        elif modus == "spatial_shuffle_0mean":
-            # Apply zero-mean normalization first, then spatial shuffling
-            # First normalize each channel to zero mean
-            height, width, channels = processed_data.shape
-            
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                processed_data[:, :, channel_idx] = channel_data - channel_mean
-            
-            # Then apply spatial shuffling
-            # Create a single random permutation for all channels to maintain relationships
-            total_pixels = height * width
-            perm_indices = np.random.permutation(total_pixels)
-            
-            # Apply same shuffling to all channels
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                flat_data = channel_data.flatten()
-                shuffled_data = flat_data[perm_indices]
-                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
-                
-            return processed_data
-            
-        elif modus == "meanandstd":
-            # Extract mean and standard deviation for VV and VH channels
-            # Returns 4 values: [mean_VV, std_VV, mean_VH, std_VH]
-            height, width, channels = processed_data.shape
-            
-            # Compute statistics for each channel (VV=0, VH=1)
-            features = []
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                channel_std = np.std(channel_data)
-                features.extend([channel_mean, channel_std])
-            
-            # Return as a 1D array of shape (4,) -> (2 channels * 2 stats)
-            return np.array(features, dtype=np.float32)
-            
-        elif modus == "std":
-            # Extract only standard deviation for VV and VH channels
-            # Returns 2 values: [std_VV, std_VH]
-            height, width, channels = processed_data.shape
-            
-            # Compute standard deviation for each channel (VV=0, VH=1)
-            features = []
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_std = np.std(channel_data)
-                features.append(channel_std)
-            
-            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
-            return np.array(features, dtype=np.float32)
-            
-        elif modus == "mean":
-            # Extract only mean for VV and VH channels
-            # Returns 2 values: [mean_VV, mean_VH]
-            height, width, channels = processed_data.shape
-            
-            # Compute mean for each channel (VV=0, VH=1)
-            features = []
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                features.append(channel_mean)
-            
-            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
-            return np.array(features, dtype=np.float32)
-            
+        # Use new modular system if available, otherwise fall back to legacy modus
+        if hasattr(self.config, 'data_processing') and self.config.data_processing:
+            dp = self.config.data_processing
+            return process_patch(
+                patch_data=patch_data,
+                shuffled=dp.shuffled,
+                zero_mean=dp.zero_mean,
+                normalized=dp.normalized,
+                quantiles=dp.quantiles,
+                aggregation=dp.aggregation,
+                seed=42  # Use consistent seed for training
+            )
         else:
-            raise ValueError(f"Unknown modus: {modus}")
+            # Legacy support - convert modus to modular parameters
+            from .data_config import _convert_modus_to_modular
+            config = _convert_modus_to_modular(self.config.modus)
+            
+            return process_patch(
+                patch_data=patch_data,
+                shuffled=config.shuffled,
+                zero_mean=config.zero_mean,
+                normalized=config.normalized,
+                quantiles=config.quantiles,
+                aggregation=config.aggregation,
+                seed=42
+            )
     
     def _balance_class_distribution(self):
         """Balance class distribution by subsampling to minimum class count."""
@@ -439,6 +343,9 @@ class ModelTrainer:
         """Create model based on architecture configuration."""
         architecture_id = config.neural_network.network_architecture_id.lower()
         
+        # Auto-select architecture based on modular processing configuration
+        architecture_id = self._determine_architecture(config, architecture_id)
+        
         if architecture_id == 'test_flat_2_layers':
             return TestFlat2Layers(config)
         elif architecture_id == 'test_conv2d':
@@ -450,15 +357,19 @@ class ModelTrainer:
                 dropout_rate=config.neural_network.dropout_rate
             )
         elif architecture_id == 'linear_stats_net':
-            # Determine input size based on modus
-            if config.modus == 'meanandstd':
-                input_size = 4  # [mean_VV, std_VV, mean_VH, std_VH]
-            elif config.modus == 'std':
-                input_size = 2  # [std_VV, std_VH]
-            elif config.modus == 'mean':
-                input_size = 2  # [mean_VV, mean_VH]
+            # Determine input size based on modular processing configuration
+            from .modular_processing import get_expected_input_size
+            
+            # Use new modular system if available, otherwise fall back to legacy modus
+            if hasattr(config, 'data_processing') and config.data_processing:
+                aggregation = config.data_processing.aggregation
             else:
-                input_size = 4  # default
+                # Legacy support - convert modus to aggregation type
+                from .data_config import _convert_modus_to_modular
+                dp_config = _convert_modus_to_modular(config.modus)
+                aggregation = dp_config.aggregation
+            
+            input_size = get_expected_input_size(config.neural_network.patch_size, aggregation)
                 
             return LinearStatsNet(
                 num_classes=len(config.classes),
@@ -470,6 +381,48 @@ class ModelTrainer:
         else:
             logger.warning(f"Unknown architecture '{architecture_id}', defaulting to test_flat_2_layers")
             return TestFlat2Layers(config)
+    
+    def _determine_architecture(self, config: TrainingDataConfig, requested_arch: str) -> str:
+        """Automatically determine network architecture based on processing configuration.
+        
+        Args:
+            config: Training configuration
+            requested_arch: Requested architecture from config
+            
+        Returns:
+            Final architecture to use
+        """
+        from .modular_processing import determine_network_architecture
+        
+        # Get aggregation setting from modular processing config
+        if hasattr(config, 'data_processing') and config.data_processing:
+            aggregation = config.data_processing.aggregation
+        else:
+            # Legacy support - convert modus to aggregation type  
+            from .data_config import _convert_modus_to_modular
+            dp_config = _convert_modus_to_modular(config.modus)
+            aggregation = dp_config.aggregation
+        
+        # Determine appropriate architecture
+        auto_arch = determine_network_architecture(aggregation)
+        
+        # Check if requested architecture is compatible
+        if aggregation is None:
+            # Spatial data - needs Conv2D architecture
+            if requested_arch in ['test_conv2d', 'test_conv2d_n2']:
+                logger.info(f"Using requested spatial architecture: {requested_arch}")
+                return requested_arch
+            else:
+                logger.info(f"Auto-selecting {auto_arch} for spatial data (aggregation=None)")
+                return auto_arch
+        else:
+            # Statistical features - needs LinearStatsNet
+            if requested_arch == 'linear_stats_net':
+                logger.info(f"Using requested statistical architecture: {requested_arch}")
+                return requested_arch
+            else:
+                logger.info(f"Auto-selecting {auto_arch} for statistical features (aggregation={aggregation})")
+                return auto_arch
     
     def _plot_network_structure(self, config: TrainingDataConfig):
         """Plot and save network structure visualization."""
@@ -484,15 +437,19 @@ class ModelTrainer:
             if arch_id in ['test_conv2d', 'test_conv2d_n2']:
                 sample_input = torch.randn(1, 2, patch_size, patch_size).to(self.device)
             elif arch_id == 'linear_stats_net':
-                # LinearStatsNet input size depends on modus
-                if config.modus == 'meanandstd':
-                    input_size = 4  # [mean_VV, std_VV, mean_VH, std_VH]
-                elif config.modus == 'std':
-                    input_size = 2  # [std_VV, std_VH]
-                elif config.modus == 'mean':
-                    input_size = 2  # [mean_VV, mean_VH]
+                # LinearStatsNet input size depends on modular processing configuration
+                from .modular_processing import get_expected_input_size
+                
+                # Use new modular system if available, otherwise fall back to legacy modus
+                if hasattr(config, 'data_processing') and config.data_processing:
+                    aggregation = config.data_processing.aggregation
                 else:
-                    input_size = 4  # default
+                    # Legacy support - convert modus to aggregation type
+                    from .data_config import _convert_modus_to_modular
+                    dp_config = _convert_modus_to_modular(config.modus)
+                    aggregation = dp_config.aggregation
+                
+                input_size = get_expected_input_size(config.neural_network.patch_size, aggregation)
                 sample_input = torch.randn(1, input_size).to(self.device)
             else:
                 # For flat layers: flattened input

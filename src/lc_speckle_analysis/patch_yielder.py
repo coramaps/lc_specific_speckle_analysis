@@ -50,143 +50,67 @@ class Patch:
     class_id: int  # Class label
     data_mode: DataMode  # Data mode (train/validation/test)
     
-    def get_data(self, modus: str = "raw") -> np.ndarray:
+    def get_data(self, 
+                 shuffled: bool = False,
+                 zero_mean: bool = False,
+                 normalized: bool = False,
+                 quantiles: bool = False,
+                 aggregation: Optional[str] = None,
+                 seed: int = 42) -> np.ndarray:
         """
-        Get patch data with specified processing mode.
+        Get patch data with modular processing pipeline.
         
         Args:
-            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', 'spatial_shuffle', 'meanandstd', or 'std'
+            shuffled: Apply spatial shuffling (pixels spatially shuffled, both channels same order)
+            zero_mean: Subtract mean per patch and channel (zero-center each patch)
+            normalized: Normalize pixels to std=1
+            quantiles: Convert pixels to quantiles
+            aggregation: Statistical aggregation ('std', 'mean', 'stdandmean', or None)
+            seed: Random seed for reproducible operations
             
         Returns:
-            numpy array with shape (height, width, channels) for spatial modes, (4,) for 'meanandstd', or (2,) for 'std'
+            Processed patch data. 3D array (height, width, channels) if no aggregation,
+            1D feature vector if aggregation is applied.
         """
-        processed_data = self.data.copy()
+        from .modular_processing import process_patch
         
-        if modus == "raw":
-            return processed_data
-            
-        elif modus == "data_with_zero_mean":
-            # Apply zero-mean normalization per channel
-            for channel_idx in range(processed_data.shape[2]):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                processed_data[:, :, channel_idx] = channel_data - channel_mean
-            return processed_data
-            
-        elif modus == "quantiles":
-            # Transform each patch to quantiles (0.00, 0.01, ..., 1.00)
-            # This discards spectral information and tests spatial structure benefit
-            from scipy.stats import rankdata
-            
-            for channel_idx in range(processed_data.shape[2]):
-                channel_data = processed_data[:, :, channel_idx]
-                flat_data = channel_data.flatten()
-                
-                # Use scipy.stats.rankdata to get ranks, then normalize to [0,1]
-                ranks = rankdata(flat_data, method='average')  # Handles ties properly
-                quantile_data = (ranks - 1) / (len(flat_data) - 1)  # Normalize to [0,1]
-                
-                processed_data[:, :, channel_idx] = quantile_data.reshape(channel_data.shape)
-            return processed_data
-            
-        elif modus == "spatial_shuffle":
-            # Shuffle pixels within each patch (same indices for VV and VH)
-            # This tests spectral information without spatial structure
-            height, width, channels = processed_data.shape
-            n_pixels = height * width
-            
-            # Generate random permutation for pixel positions
-            np.random.seed(42)  # For reproducibility
-            perm_indices = np.random.permutation(n_pixels)
-            
-            # Apply same shuffling to all channels
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                flat_data = channel_data.flatten()
-                shuffled_data = flat_data[perm_indices]
-                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
-                
-            return processed_data
-            
-        elif modus == "spatial_shuffle_0mean":
-            # Apply zero-mean normalization first, then spatial shuffling
-            # First normalize each channel to zero mean
-            height, width, channels = processed_data.shape
-            
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                processed_data[:, :, channel_idx] = channel_data - channel_mean
-            
-            # Then apply spatial shuffling
-            # Generate random permutation for pixel positions
-            np.random.seed(42)  # For reproducibility
-            n_pixels = height * width
-            perm_indices = np.random.permutation(n_pixels)
-            
-            # Apply same shuffling to all channels
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                flat_data = channel_data.flatten()
-                shuffled_data = flat_data[perm_indices]
-                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
-                
-            return processed_data
-            
-        elif modus == "meanandstd":
-            # Extract mean and standard deviation for VV and VH channels
-            # Returns 4 values: [mean_VV, std_VV, mean_VH, std_VH]
-            height, width, channels = processed_data.shape
-            
-            # Compute statistics for each channel (VV=0, VH=1)
-            features = []
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                channel_std = np.std(channel_data)
-                features.extend([channel_mean, channel_std])
-            
-            # Return as a 1D array of shape (4,) -> (2 channels * 2 stats)
-            return np.array(features, dtype=np.float32)
-            
-        elif modus == "std":
-            # Extract only standard deviation for VV and VH channels
-            # Returns 2 values: [std_VV, std_VH]
-            height, width, channels = processed_data.shape
-            
-            # Compute standard deviation for each channel (VV=0, VH=1)
-            features = []
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_std = np.std(channel_data)
-                features.append(channel_std)
-            
-            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
-            return np.array(features, dtype=np.float32)
-            
-        elif modus == "mean":
-            # Extract only mean for VV and VH channels
-            # Returns 2 values: [mean_VV, mean_VH]
-            height, width, channels = processed_data.shape
-            
-            # Compute mean for each channel (VV=0, VH=1)
-            features = []
-            for channel_idx in range(channels):
-                channel_data = processed_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                features.append(channel_mean)
-            
-            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
-            return np.array(features, dtype=np.float32)
-            
-        else:
-            raise ValueError(f"Unknown modus: {modus}")
+        return process_patch(
+            patch_data=self.data,
+            shuffled=shuffled,
+            zero_mean=zero_mean,
+            normalized=normalized,
+            quantiles=quantiles,
+            aggregation=aggregation,
+            seed=seed
+        )
     
-    # Backward compatibility method
-    def get_data_legacy(self, zero_mean: bool = False) -> np.ndarray:
-        """Legacy method for backward compatibility."""
-        modus = "data_with_zero_mean" if zero_mean else "raw"
-        return self.get_data(modus)
+    def get_data_legacy(self, modus: str = "raw") -> np.ndarray:
+        """
+        Legacy method for backward compatibility with modus-based processing.
+        
+        Args:
+            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', etc.
+            
+        Returns:
+            Processed patch data
+        """
+        from .data_config import _convert_modus_to_modular
+        
+        # Convert legacy modus to modular parameters
+        config = _convert_modus_to_modular(modus)
+        
+        return self.get_data(
+            shuffled=config.shuffled,
+            zero_mean=config.zero_mean,
+            normalized=config.normalized,
+            quantiles=config.quantiles,
+            aggregation=config.aggregation
+        )
+    
+    # Additional backward compatibility method for zero_mean parameter
+    def get_data_zero_mean_legacy(self, zero_mean: bool = False) -> np.ndarray:
+        """Legacy method for backward compatibility with zero_mean parameter."""
+        return self.get_data(zero_mean=zero_mean)
 
 @dataclass
 class ImageTuple:
