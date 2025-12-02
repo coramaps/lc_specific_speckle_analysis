@@ -55,10 +55,10 @@ class Patch:
         Get patch data with specified processing mode.
         
         Args:
-            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', or 'spatial_shuffle'
+            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', 'spatial_shuffle', 'meanandstd', or 'std'
             
         Returns:
-            numpy array with shape (height, width, channels)
+            numpy array with shape (height, width, channels) for spatial modes, (4,) for 'meanandstd', or (2,) for 'std'
         """
         processed_data = self.data.copy()
         
@@ -107,6 +107,77 @@ class Patch:
                 processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
                 
             return processed_data
+            
+        elif modus == "spatial_shuffle_0mean":
+            # Apply zero-mean normalization first, then spatial shuffling
+            # First normalize each channel to zero mean
+            height, width, channels = processed_data.shape
+            
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                processed_data[:, :, channel_idx] = channel_data - channel_mean
+            
+            # Then apply spatial shuffling
+            # Generate random permutation for pixel positions
+            np.random.seed(42)  # For reproducibility
+            n_pixels = height * width
+            perm_indices = np.random.permutation(n_pixels)
+            
+            # Apply same shuffling to all channels
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                flat_data = channel_data.flatten()
+                shuffled_data = flat_data[perm_indices]
+                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
+                
+            return processed_data
+            
+        elif modus == "meanandstd":
+            # Extract mean and standard deviation for VV and VH channels
+            # Returns 4 values: [mean_VV, std_VV, mean_VH, std_VH]
+            height, width, channels = processed_data.shape
+            
+            # Compute statistics for each channel (VV=0, VH=1)
+            features = []
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                channel_std = np.std(channel_data)
+                features.extend([channel_mean, channel_std])
+            
+            # Return as a 1D array of shape (4,) -> (2 channels * 2 stats)
+            return np.array(features, dtype=np.float32)
+            
+        elif modus == "std":
+            # Extract only standard deviation for VV and VH channels
+            # Returns 2 values: [std_VV, std_VH]
+            height, width, channels = processed_data.shape
+            
+            # Compute standard deviation for each channel (VV=0, VH=1)
+            features = []
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_std = np.std(channel_data)
+                features.append(channel_std)
+            
+            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
+            return np.array(features, dtype=np.float32)
+            
+        elif modus == "mean":
+            # Extract only mean for VV and VH channels
+            # Returns 2 values: [mean_VV, mean_VH]
+            height, width, channels = processed_data.shape
+            
+            # Compute mean for each channel (VV=0, VH=1)
+            features = []
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                features.append(channel_mean)
+            
+            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
+            return np.array(features, dtype=np.float32)
             
         else:
             raise ValueError(f"Unknown modus: {modus}")

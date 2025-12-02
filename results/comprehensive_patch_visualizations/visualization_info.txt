@@ -1,0 +1,31 @@
+Comprehensive Patch Visualization Information
+============================================================
+Generated: create_comprehensive_patch_visualizations.py
+Configuration modus: data_with_zero_mean
+Patch size: 10x10
+Classes: [1, 4, 6, 12]
+Total patches sampled: 5
+
+Spatial Processing Methods (Conv2D_N2):
+- raw: Original pixel values (no preprocessing)
+- zero_mean: Per-channel mean subtraction
+- quantiles: Quantile transformation (spatial structure preserved)
+- spatial_shuffle_0mean: Spatial shuffling + zero-mean normalization
+- spatial_shuffle: Pixel shuffling (spectral relationships preserved)
+
+Statistical Processing Methods (LinearStatsNet):
+- std: Standard deviation features (2 features: std_VV, std_VH)
+- meanandstd: Combined mean and std features (4 features: mean_VV, std_VV, mean_VH, std_VH)
+- mean: Mean features (2 features: mean_VV, mean_VH)
+
+Generated Files:
+- tiff_files/: GeoTIFF files for spatial processing methods
+- spatial_overviews/: PNG overview plots for spatial methods
+- statistical_mini_plots/: Mini visualizations for statistical features
+
+Selected Patches:
+Patch 1: Original index 40, Class 4
+Patch 2: Original index 9, Class 4
+Patch 3: Original index 26, Class 12
+Patch 4: Original index 36, Class 4
+Patch 5: Original index 46, Class 1

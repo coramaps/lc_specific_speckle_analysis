@@ -32,6 +32,7 @@ from .data_config import TrainingDataConfig
 from .network_architectures.test_flat_2_layers import TestFlat2Layers
 from .network_architectures.test_conv2d import TestConv2D
 from .network_architectures.test_conv2d_n2 import TestConv2D_N2
+from .network_architectures.linear_stats_net import LinearStatsNet
 from .patch_yielder import PatchYielder, DataMode
 
 # Set up logging
@@ -120,10 +121,11 @@ class PatchDataset(Dataset):
         
         Args:
             patch_data: Raw patch data with shape (height, width, channels)
-            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', or 'spatial_shuffle'
+            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', 'spatial_shuffle', 'meanandstd', or 'std'
             
         Returns:
-            Processed patch data
+            Processed patch data. For 'meanandstd' returns 1D array of shape (4,) with [mean_VV, std_VV, mean_VH, std_VH].
+            For 'std' returns 1D array of shape (2,) with [std_VV, std_VH]
         """
         processed_data = patch_data.copy()
         
@@ -174,6 +176,76 @@ class PatchDataset(Dataset):
                 processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
                 
             return processed_data
+            
+        elif modus == "spatial_shuffle_0mean":
+            # Apply zero-mean normalization first, then spatial shuffling
+            # First normalize each channel to zero mean
+            height, width, channels = processed_data.shape
+            
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                processed_data[:, :, channel_idx] = channel_data - channel_mean
+            
+            # Then apply spatial shuffling
+            # Create a single random permutation for all channels to maintain relationships
+            total_pixels = height * width
+            perm_indices = np.random.permutation(total_pixels)
+            
+            # Apply same shuffling to all channels
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                flat_data = channel_data.flatten()
+                shuffled_data = flat_data[perm_indices]
+                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
+                
+            return processed_data
+            
+        elif modus == "meanandstd":
+            # Extract mean and standard deviation for VV and VH channels
+            # Returns 4 values: [mean_VV, std_VV, mean_VH, std_VH]
+            height, width, channels = processed_data.shape
+            
+            # Compute statistics for each channel (VV=0, VH=1)
+            features = []
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                channel_std = np.std(channel_data)
+                features.extend([channel_mean, channel_std])
+            
+            # Return as a 1D array of shape (4,) -> (2 channels * 2 stats)
+            return np.array(features, dtype=np.float32)
+            
+        elif modus == "std":
+            # Extract only standard deviation for VV and VH channels
+            # Returns 2 values: [std_VV, std_VH]
+            height, width, channels = processed_data.shape
+            
+            # Compute standard deviation for each channel (VV=0, VH=1)
+            features = []
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_std = np.std(channel_data)
+                features.append(channel_std)
+            
+            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
+            return np.array(features, dtype=np.float32)
+            
+        elif modus == "mean":
+            # Extract only mean for VV and VH channels
+            # Returns 2 values: [mean_VV, mean_VH]
+            height, width, channels = processed_data.shape
+            
+            # Compute mean for each channel (VV=0, VH=1)
+            features = []
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                features.append(channel_mean)
+            
+            # Return as a 1D array of shape (2,) -> (2 channels * 1 stat)
+            return np.array(features, dtype=np.float32)
             
         else:
             raise ValueError(f"Unknown modus: {modus}")
@@ -377,6 +449,24 @@ class ModelTrainer:
                 num_classes=len(config.classes),
                 dropout_rate=config.neural_network.dropout_rate
             )
+        elif architecture_id == 'linear_stats_net':
+            # Determine input size based on modus
+            if config.modus == 'meanandstd':
+                input_size = 4  # [mean_VV, std_VV, mean_VH, std_VH]
+            elif config.modus == 'std':
+                input_size = 2  # [std_VV, std_VH]
+            elif config.modus == 'mean':
+                input_size = 2  # [mean_VV, mean_VH]
+            else:
+                input_size = 4  # default
+                
+            return LinearStatsNet(
+                num_classes=len(config.classes),
+                input_size=input_size,
+                hidden_size=config.neural_network.layer_sizes[0] if config.neural_network.layer_sizes else 16,
+                dropout_rate=config.neural_network.dropout_rate,
+                activation=config.neural_network.activation_function
+            )
         else:
             logger.warning(f"Unknown architecture '{architecture_id}', defaulting to test_flat_2_layers")
             return TestFlat2Layers(config)
@@ -389,9 +479,21 @@ class ModelTrainer:
             
             # For convolutional networks: (batch, channels, height, width)
             # For flat networks: (batch, features)
+            # For linear stats network: (batch, input_size)
             arch_id = config.neural_network.network_architecture_id.lower()
             if arch_id in ['test_conv2d', 'test_conv2d_n2']:
                 sample_input = torch.randn(1, 2, patch_size, patch_size).to(self.device)
+            elif arch_id == 'linear_stats_net':
+                # LinearStatsNet input size depends on modus
+                if config.modus == 'meanandstd':
+                    input_size = 4  # [mean_VV, std_VV, mean_VH, std_VH]
+                elif config.modus == 'std':
+                    input_size = 2  # [std_VV, std_VH]
+                elif config.modus == 'mean':
+                    input_size = 2  # [mean_VV, mean_VH]
+                else:
+                    input_size = 4  # default
+                sample_input = torch.randn(1, input_size).to(self.device)
             else:
                 # For flat layers: flattened input
                 sample_input = torch.randn(1, patch_size * patch_size * 2).to(self.device)

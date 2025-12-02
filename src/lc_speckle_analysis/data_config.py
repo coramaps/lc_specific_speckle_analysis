@@ -113,7 +113,7 @@ class TrainingDataConfig:
         # Handle both new 'modus' parameter and legacy 'data_with_zero_mean' boolean
         if 'modus' in train_section:
             modus = train_section.get('modus', 'raw').strip()
-            valid_modus = ['data_with_zero_mean', 'raw', 'quantiles', 'spatial_shuffle']
+            valid_modus = ['data_with_zero_mean', 'raw', 'quantiles', 'spatial_shuffle', 'meanandstd', 'std', 'mean', 'spatial_shuffle_0mean']
             if modus not in valid_modus:
                 raise ValueError(f"Invalid modus '{modus}'. Must be one of {valid_modus}")
         else:
