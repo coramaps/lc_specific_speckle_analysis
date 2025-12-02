@@ -1,0 +1,20 @@
+Patch Sample Information
+==================================================
+Generated: save_patch_samples.py
+Configuration modus: data_with_zero_mean
+Patch size: 10x10
+Classes: [1, 4, 6, 12]
+Total patches sampled: 5
+
+Modus Descriptions:
+- raw: Original pixel values (no preprocessing)
+- data_with_zero_mean: Per-channel mean subtraction
+- quantiles: Quantile transformation (spatial info only)
+- spatial_shuffle: Pixel shuffling (spectral info only)
+
+Selected Patches:
+Patch 1: Original index 40, Class 4
+Patch 2: Original index 9, Class 4
+Patch 3: Original index 26, Class 12
+Patch 4: Original index 36, Class 4
+Patch 5: Original index 46, Class 1

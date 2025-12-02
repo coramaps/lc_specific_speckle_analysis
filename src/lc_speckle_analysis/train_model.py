@@ -101,18 +101,11 @@ class PatchDataset(Dataset):
         patch_data = self.patches[idx]
         label = self.labels[idx]
         
-        # Apply zero-mean normalization if configured
-        if self.config.data_with_zero_mean:
-            # Apply per-channel mean subtraction for VV and VH
-            normalized_data = patch_data.copy()
-            for channel_idx in range(normalized_data.shape[2]):
-                channel_data = normalized_data[:, :, channel_idx]
-                channel_mean = np.mean(channel_data)
-                normalized_data[:, :, channel_idx] = channel_data - channel_mean
-            patch_data = normalized_data
+        # Apply data processing based on modus
+        processed_data = self._apply_data_processing(patch_data, self.config.modus)
         
         # Convert to tensor
-        patch_tensor = torch.FloatTensor(patch_data)
+        patch_tensor = torch.FloatTensor(processed_data)
         label_tensor = torch.LongTensor([label])[0]
         
         # Apply transforms if any
@@ -120,6 +113,70 @@ class PatchDataset(Dataset):
             patch_tensor = self.transform(patch_tensor)
         
         return patch_tensor, label_tensor
+    
+    def _apply_data_processing(self, patch_data: np.ndarray, modus: str) -> np.ndarray:
+        """
+        Apply data processing based on modus.
+        
+        Args:
+            patch_data: Raw patch data with shape (height, width, channels)
+            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', or 'spatial_shuffle'
+            
+        Returns:
+            Processed patch data
+        """
+        processed_data = patch_data.copy()
+        
+        if modus == "raw":
+            return processed_data
+            
+        elif modus == "data_with_zero_mean":
+            # Apply zero-mean normalization per channel (VV and VH)
+            for channel_idx in range(processed_data.shape[2]):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                processed_data[:, :, channel_idx] = channel_data - channel_mean
+            return processed_data
+            
+        elif modus == "quantiles":
+            # Transform each patch to quantiles (0.00, 0.01, ..., 1.00)
+            # This discards spectral information and tests spatial structure benefit
+            from scipy.stats import rankdata
+            
+            for channel_idx in range(processed_data.shape[2]):
+                channel_data = processed_data[:, :, channel_idx]
+                flat_data = channel_data.flatten()
+                
+                # Use scipy.stats.rankdata to get ranks, then normalize to [0,1]
+                ranks = rankdata(flat_data, method='average')  # Handles ties properly
+                quantile_data = (ranks - 1) / (len(flat_data) - 1)  # Normalize to [0,1]
+                
+                processed_data[:, :, channel_idx] = quantile_data.reshape(channel_data.shape)
+            return processed_data
+            
+        elif modus == "spatial_shuffle":
+            # Shuffle pixels within each patch (same indices for VV and VH)
+            # This tests spectral information without spatial structure
+            height, width, channels = processed_data.shape
+            n_pixels = height * width
+            
+            # Generate random permutation for pixel positions (deterministic per patch)
+            # Use patch data as seed for reproducible but different shuffling per patch
+            patch_seed = int(np.sum(patch_data) * 1000) % (2**31)  # Convert to valid seed
+            np.random.seed(patch_seed)
+            perm_indices = np.random.permutation(n_pixels)
+            
+            # Apply same shuffling to all channels
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                flat_data = channel_data.flatten()
+                shuffled_data = flat_data[perm_indices]
+                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
+                
+            return processed_data
+            
+        else:
+            raise ValueError(f"Unknown modus: {modus}")
     
     def _balance_class_distribution(self):
         """Balance class distribution by subsampling to minimum class count."""

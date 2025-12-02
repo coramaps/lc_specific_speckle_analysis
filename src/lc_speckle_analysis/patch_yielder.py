@@ -50,36 +50,72 @@ class Patch:
     class_id: int  # Class label
     data_mode: DataMode  # Data mode (train/validation/test)
     
-    def get_data(self, zero_mean: bool = False) -> np.ndarray:
+    def get_data(self, modus: str = "raw") -> np.ndarray:
         """
-        Get patch data with optional zero-mean normalization.
-        
-        For SAR data with VV and VH channels, zero-mean normalization 
-        subtracts the mean from each channel separately to remove 
-        absolute intensity values while preserving structural information.
+        Get patch data with specified processing mode.
         
         Args:
-            zero_mean: If True, subtract the mean from each channel (VV, VH) separately
+            modus: Processing mode - 'raw', 'data_with_zero_mean', 'quantiles', or 'spatial_shuffle'
             
         Returns:
             numpy array with shape (height, width, channels)
-            - If zero_mean=False: returns original data
-            - If zero_mean=True: returns data with per-channel mean subtracted
         """
-        if not zero_mean:
-            return self.data.copy()
+        processed_data = self.data.copy()
         
-        # Apply zero-mean normalization per channel
-        normalized_data = self.data.copy()
-        
-        # Assuming channels are in the last dimension (height, width, channels)
-        # For SAR data: typically channel 0 = VV, channel 1 = VH
-        for channel_idx in range(normalized_data.shape[2]):
-            channel_data = normalized_data[:, :, channel_idx]
-            channel_mean = np.mean(channel_data)
-            normalized_data[:, :, channel_idx] = channel_data - channel_mean
+        if modus == "raw":
+            return processed_data
             
-        return normalized_data
+        elif modus == "data_with_zero_mean":
+            # Apply zero-mean normalization per channel
+            for channel_idx in range(processed_data.shape[2]):
+                channel_data = processed_data[:, :, channel_idx]
+                channel_mean = np.mean(channel_data)
+                processed_data[:, :, channel_idx] = channel_data - channel_mean
+            return processed_data
+            
+        elif modus == "quantiles":
+            # Transform each patch to quantiles (0.00, 0.01, ..., 1.00)
+            # This discards spectral information and tests spatial structure benefit
+            from scipy.stats import rankdata
+            
+            for channel_idx in range(processed_data.shape[2]):
+                channel_data = processed_data[:, :, channel_idx]
+                flat_data = channel_data.flatten()
+                
+                # Use scipy.stats.rankdata to get ranks, then normalize to [0,1]
+                ranks = rankdata(flat_data, method='average')  # Handles ties properly
+                quantile_data = (ranks - 1) / (len(flat_data) - 1)  # Normalize to [0,1]
+                
+                processed_data[:, :, channel_idx] = quantile_data.reshape(channel_data.shape)
+            return processed_data
+            
+        elif modus == "spatial_shuffle":
+            # Shuffle pixels within each patch (same indices for VV and VH)
+            # This tests spectral information without spatial structure
+            height, width, channels = processed_data.shape
+            n_pixels = height * width
+            
+            # Generate random permutation for pixel positions
+            np.random.seed(42)  # For reproducibility
+            perm_indices = np.random.permutation(n_pixels)
+            
+            # Apply same shuffling to all channels
+            for channel_idx in range(channels):
+                channel_data = processed_data[:, :, channel_idx]
+                flat_data = channel_data.flatten()
+                shuffled_data = flat_data[perm_indices]
+                processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
+                
+            return processed_data
+            
+        else:
+            raise ValueError(f"Unknown modus: {modus}")
+    
+    # Backward compatibility method
+    def get_data_legacy(self, zero_mean: bool = False) -> np.ndarray:
+        """Legacy method for backward compatibility."""
+        modus = "data_with_zero_mean" if zero_mean else "raw"
+        return self.get_data(modus)
 
 @dataclass
 class ImageTuple:
@@ -1001,6 +1037,7 @@ class PatchYielder:
             "classes": sorted(self.config.classes),
             "n_patches_per_feature": self.config.n_patches_per_feature,
             "n_patches_per_area": self.config.n_patches_per_area,
+            "modus": self.config.modus,  # Include modus in cache key
             "epsg": self.target_epsg,
             "seed": self.seed
         }
@@ -1040,6 +1077,7 @@ class PatchYielder:
             "classes": sorted(self.config.classes),
             "n_patches_per_feature": self.config.n_patches_per_feature,
             "n_patches_per_area": self.config.n_patches_per_area,
+            "modus": self.config.modus,  # Include modus in cache key
             "epsg": self.target_epsg,
             "seed": self.seed
         }

@@ -4,7 +4,7 @@ Run training with all combinations of specified configurations.
 
 This script tests different combinations of:
 - shuffle_labels: True/False  
-- data_with_zero_mean: True/False
+- modus: 'data_with_zero_mean', 'raw', 'quantiles', 'spatial_shuffle'
 - dates: single date vs multiple dates
 - architectures: test_conv2d vs test_conv2d_n2
 
@@ -25,17 +25,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from lc_speckle_analysis.config import logger
 
-# Base configuration combinations to test
+# Base configuration combinations to test - using new modus parameter
 BASE_CONFIG_COMBINATIONS = [
-    # Format: (shuffle_labels, data_with_zero_mean, dates)
-    (False, True, "20220611"),           # Current config baseline
-    (False, False, "20220611"),          # No zero-mean normalization
-    (False, True, "20220611,20220623"),  # Multiple dates with zero-mean
-    (False, False, "20220611,20220623"), # Multiple dates without zero-mean
-    # (True, True, "20220611"),            # Shuffled labels baseline
-    # (True, False, "20220611"),           # Shuffled labels, no zero-mean
-    # (True, True, "20220611,20220623"),   # Shuffled labels, multiple dates, zero-mean
-    # (True, False, "20220611,20220623"),  # Shuffled labels, multiple dates, no zero-mean
+    # Format: (shuffle_labels, modus, dates)
+    (False, "data_with_zero_mean", "20220611"),  # Zero-mean normalization
+    (False, "raw", "20220611"),                  # Raw data (no preprocessing)
+    (False, "quantiles", "20220611"),            # Quantile transformation (spatial only)
+    (False, "spatial_shuffle", "20220611"),      # Spatial shuffle (spectral only)
 ]
 
 # Available network architectures
@@ -47,8 +43,8 @@ ARCHITECTURES = [
 # Generate all combinations including architectures
 CONFIG_COMBINATIONS = []
 for arch in ARCHITECTURES:
-    for shuffle_labels, data_with_zero_mean, dates in BASE_CONFIG_COMBINATIONS:
-        CONFIG_COMBINATIONS.append((shuffle_labels, data_with_zero_mean, dates, arch))
+    for shuffle_labels, modus, dates in BASE_CONFIG_COMBINATIONS:
+        CONFIG_COMBINATIONS.append((shuffle_labels, modus, dates, arch))
 
 def load_base_config() -> str:
     """Load the base configuration file content."""
@@ -56,7 +52,7 @@ def load_base_config() -> str:
     return config_path.read_text()
 
 def create_temp_config(base_config: str, shuffle_labels: bool, 
-                      data_with_zero_mean: bool, dates: str, architecture: str) -> str:
+                      modus: str, dates: str, architecture: str) -> str:
     """Create a temporary configuration file with specified parameters."""
     # Split config into lines for modification
     lines = base_config.split('\n')
@@ -66,10 +62,11 @@ def create_temp_config(base_config: str, shuffle_labels: bool,
         line_stripped = line.strip()
         if line_stripped.startswith('shuffle_labels'):
             lines[i] = f"shuffle_labels = {str(shuffle_labels).lower()}"
+        elif line_stripped.startswith('modus'):
+            lines[i] = f"modus = {modus}"
         elif line_stripped.startswith('data_with_zero_mean'):
-            # Update to new modus parameter format
-            modus_value = 'data_with_zero_mean' if data_with_zero_mean else 'raw'
-            lines[i] = f"modus = '{modus_value}'"
+            # Replace legacy parameter with new modus parameter
+            lines[i] = f"modus = {modus}"
         elif line_stripped.startswith('dates'):
             lines[i] = f"dates = {dates}"
         elif line_stripped.startswith('network_architecture_id'):
@@ -84,14 +81,14 @@ def create_temp_config(base_config: str, shuffle_labels: bool,
     
     return '\n'.join(lines)
 
-def generate_run_id(shuffle_labels: bool, data_with_zero_mean: bool, dates: str, architecture: str) -> str:
+def generate_run_id(shuffle_labels: bool, modus: str, dates: str, architecture: str) -> str:
     """Generate a unique run ID based on configuration parameters."""
     shuffle_str = "shuffled" if shuffle_labels else "normal"
-    zeromean_str = "zeromean" if data_with_zero_mean else "raw"
+    modus_str = modus.replace("_", "")  # Convert modus to short string
     dates_str = "single" if "," not in dates else "multi"
     arch_str = architecture.replace("test_", "")  # conv2d or conv2d_n2
     
-    return f"{shuffle_str}_{zeromean_str}_{dates_str}_{dates.replace(',', '_')}_{arch_str}"
+    return f"{shuffle_str}_{modus_str}_{dates_str}_{dates.replace(',', '_')}_{arch_str}"
 
 def run_training(config_content: str, run_id: str) -> Tuple[bool, str]:
     """Run training with the given configuration."""
@@ -167,28 +164,28 @@ def main():
     logger.info(f"  - Base combinations: {len(BASE_CONFIG_COMBINATIONS)}")
     logger.info(f"  - Total: {len(ARCHITECTURES)} × {len(BASE_CONFIG_COMBINATIONS)} = {total_combinations}")
     
-    for i, (shuffle_labels, data_with_zero_mean, dates, arch) in enumerate(CONFIG_COMBINATIONS, 1):
-        logger.info(f"  {i:2d}. shuffle_labels={shuffle_labels}, data_with_zero_mean={data_with_zero_mean}, dates={dates}, arch={arch}")
+    for i, (shuffle_labels, modus, dates, arch) in enumerate(CONFIG_COMBINATIONS, 1):
+        logger.info(f"  {i:2d}. shuffle_labels={shuffle_labels}, modus={modus}, dates={dates}, arch={arch}")
     
     logger.info("")
     
     # Run each combination
-    for i, (shuffle_labels, data_with_zero_mean, dates, arch) in enumerate(CONFIG_COMBINATIONS, 1):
+    for i, (shuffle_labels, modus, dates, arch) in enumerate(CONFIG_COMBINATIONS, 1):
         logger.info(f"\n{'='*60}")
         logger.info(f"COMBINATION {i}/{total_combinations}")
         logger.info(f"{'='*60}")
         logger.info(f"Configuration:")
         logger.info(f"  - shuffle_labels: {shuffle_labels}")
-        logger.info(f"  - data_with_zero_mean: {data_with_zero_mean}")
+        logger.info(f"  - modus: {modus}")
         logger.info(f"  - dates: {dates}")
         logger.info(f"  - architecture: {arch}")
         
         # Generate run ID
-        run_id = generate_run_id(shuffle_labels, data_with_zero_mean, dates, arch)
+        run_id = generate_run_id(shuffle_labels, modus, dates, arch)
         logger.info(f"  - run_id: {run_id}")
         
         # Create configuration
-        config_content = create_temp_config(base_config, shuffle_labels, data_with_zero_mean, dates, arch)
+        config_content = create_temp_config(base_config, shuffle_labels, modus, dates, arch)
         
         # Run training
         success, message = run_training(config_content, run_id)
@@ -197,7 +194,7 @@ def main():
         results.append({
             'combination': i,
             'shuffle_labels': shuffle_labels,
-            'data_with_zero_mean': data_with_zero_mean,
+            'modus': modus,
             'dates': dates,
             'architecture': arch,
             'run_id': run_id,

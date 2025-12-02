@@ -41,7 +41,7 @@ class TrainingDataConfig:
     n_patches_per_feature: int
     n_patches_per_area: float
     neural_network: NeuralNetworkConfig
-    modus: str = "raw"  # 'data_with_zero_mean' or 'raw'
+    modus: str = "raw"  # 'data_with_zero_mean', 'raw', 'quantiles', or 'spatial_shuffle'
     equal_class_dist: bool = False
     shuffle_labels: bool = False
     
@@ -113,8 +113,9 @@ class TrainingDataConfig:
         # Handle both new 'modus' parameter and legacy 'data_with_zero_mean' boolean
         if 'modus' in train_section:
             modus = train_section.get('modus', 'raw').strip()
-            if modus not in ['data_with_zero_mean', 'raw']:
-                raise ValueError(f"Invalid modus '{modus}'. Must be 'data_with_zero_mean' or 'raw'")
+            valid_modus = ['data_with_zero_mean', 'raw', 'quantiles', 'spatial_shuffle']
+            if modus not in valid_modus:
+                raise ValueError(f"Invalid modus '{modus}'. Must be one of {valid_modus}")
         else:
             # Backward compatibility: convert boolean to modus string
             data_with_zero_mean_legacy = train_section.getboolean('data_with_zero_mean', False)
