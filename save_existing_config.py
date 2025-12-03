@@ -57,7 +57,7 @@ def main():
     
     if original_hash == "c78a6a9e":
         # Save config for existing run
-        run_dir = project_root / "data" / "training_output" / f"run_{original_hash}"
+        run_dir = project_root / "data" / "training_output" / f"{original_hash}"
         if run_dir.exists():
             save_config_for_existing_run(run_dir, original_config, original_hash)
         else:

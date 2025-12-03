@@ -35,7 +35,7 @@ def extract_performance_metrics() -> pd.DataFrame:
     results = []
     
     for run_dir in training_dir.iterdir():
-        if not run_dir.is_dir() or not run_dir.name.startswith("run_"):
+        if not run_dir.is_dir():
             continue
             
         logger.info(f"Processing {run_dir.name}")
@@ -53,7 +53,7 @@ def extract_performance_metrics() -> pd.DataFrame:
                 data = json.load(f)
             
             # Extract run configuration from directory name
-            run_name = run_dir.name.replace("run_", "").split("_")
+            run_name = run_dir.name.split("_")
             
             # Parse configuration from run name
             shuffle_labels = "shuffled" in run_name[0]

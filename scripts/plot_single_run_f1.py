@@ -107,7 +107,7 @@ def create_f1_barplot_for_run(run_path: str, output_dir: Path):
     plt.tight_layout()
     
     # Generate output filename
-    run_name = run_dir.name.replace("run_", "")
+    run_name = run_dir.name
     output_filename = f"f1_scores_{run_name}.png"
     output_path = output_dir / output_filename
     

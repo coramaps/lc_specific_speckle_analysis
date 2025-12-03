@@ -281,10 +281,10 @@ class ModelTrainer:
         
         if run_id:
             self.run_id = f"{run_id}_{self.config_hash}"
-            self.output_dir = project_root / "data" / "training_output" / f"run_{self.run_id}"
+            self.output_dir = project_root / "data" / "training_output" / f"{run_id}_{self.config_hash}"
         else:
             self.run_id = self.config_hash
-            self.output_dir = project_root / "data" / "training_output" / f"run_{self.config_hash}"
+            self.output_dir = project_root / "data" / "training_output" / f"{self.config_hash}"
         
         self.output_dir.mkdir(parents=True, exist_ok=True)
         

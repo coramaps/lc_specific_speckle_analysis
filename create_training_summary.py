@@ -47,11 +47,44 @@ def get_config_name_from_hash(config_hash, training_results):
                 return config_name
     return f"config_{config_hash}"
 
+def read_config_file(config_path):
+    """Read config file and extract parameters."""
+    import configparser
+    config = configparser.ConfigParser()
+    config.read(config_path)
+    
+    params = {
+        'shuffled': False,
+        'zero_mean': False, 
+        'normalized': False,
+        'quantiles': False,
+        'aggregation': None,
+        'architecture': 'test_conv2d_n2'  # default
+    }
+    
+    if 'data_processing' in config:
+        section = config['data_processing']
+        params['shuffled'] = section.getboolean('shuffled', False)
+        params['zero_mean'] = section.getboolean('zero_mean', False)
+        params['normalized'] = section.getboolean('normalized', False)
+        params['quantiles'] = section.getboolean('quantiles', False)
+        
+        agg_value = section.get('aggregation', '').strip()
+        params['aggregation'] = agg_value if agg_value else None
+    
+    # Read the actual network architecture from config
+    if 'neural_network' in config:
+        section = config['neural_network']
+        params['architecture'] = section.get('network_architecture_id', 'test_conv2d_n2')
+    
+    return params
+
 def main():
     # Project paths
     project_root = Path("/home/davideidmann/code/lc_specific_speckle_analysis")
     training_output_dir = project_root / "data" / "training_output"
     training_results_file = project_root / "training_results" / "training_results.json"
+    configs_dir = project_root / "configs"
     
     # Load systematic training results
     training_results = {}
@@ -64,12 +97,16 @@ def main():
     all_results = []
     
     # Get all training run directories
-    run_dirs = [d for d in training_output_dir.iterdir() if d.is_dir() and d.name.startswith('run_')]
+    run_dirs = [d for d in training_output_dir.iterdir() if d.is_dir()]
     logger.info(f"Found {len(run_dirs)} training run directories")
     
     # Process each run
     for run_dir in sorted(run_dirs):
-        config_hash = run_dir.name.replace('run_', '')
+        # Extract config hash from directory name (either hash or runid_hash format)
+        if '_' in run_dir.name:
+            config_hash = run_dir.name.split('_')[-1]  # Take the last part after underscore
+        else:
+            config_hash = run_dir.name  # Just the hash itself
         test_accuracy = extract_test_accuracy(run_dir)
         
         if test_accuracy is not None:
@@ -87,25 +124,14 @@ def main():
                 else:
                     config_name = f'config_{config_hash}'
             
-            # Parse configuration parameters from name
-            params = {
-                'shuffled': 'shuffled' in config_name,
-                'zero_mean': 'zeromean' in config_name,
-                'normalized': 'normalized' in config_name,
-                'quantiles': 'quantiles' in config_name,
-                'aggregation': None
-            }
-            
-            # Determine aggregation
-            if 'stdandmean' in config_name:
-                params['aggregation'] = 'stdandmean'
-            elif 'std' in config_name:
-                params['aggregation'] = 'std'
-            elif 'mean' in config_name:
-                params['aggregation'] = 'mean'
-            
-            # Determine architecture
-            architecture = 'linear_stats_net' if params['aggregation'] else 'test_conv2d_n2'
+            # Read actual config file to get parameters
+            config_file = configs_dir / f"{config_name}.conf"
+            if config_file.exists():
+                params = read_config_file(config_file)
+                architecture = params['architecture']
+            else:
+                logger.warning(f"Config file not found: {config_file}")
+                continue
             
             all_results.append({
                 'config_name': config_name,
