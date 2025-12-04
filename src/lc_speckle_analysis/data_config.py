@@ -87,6 +87,7 @@ class TrainingDataConfig:
     data_processing: DataProcessingConfig
     equal_class_dist: bool = False
     shuffle_labels: bool = False
+    unique_name: Optional[str] = None  # Unique identifier for this configuration
     
     # Legacy support - will be deprecated
     modus: Optional[str] = None
@@ -133,6 +134,7 @@ class TrainingDataConfig:
         paths_str = train_section.get('paths') or train_section.get('path')
         column_id = train_section.get('column_id')
         classes_str = train_section.get('classes')
+        unique_name = train_section.get('unique_name')  # Optional unique identifier
         
         if not all([paths_str, column_id, classes_str]):
             raise ValueError("Missing required fields in [training_data] section")
@@ -301,7 +303,8 @@ class TrainingDataConfig:
             data_processing=data_processing_config,
             modus=modus,  # Keep for legacy logging/debugging
             equal_class_dist=equal_class_dist,
-            shuffle_labels=shuffle_labels
+            shuffle_labels=shuffle_labels,
+            unique_name=unique_name
         )
             
     def get_file_paths(self) -> List[Path]:
@@ -348,6 +351,87 @@ class TrainingDataConfig:
         
         return valid
     
+    def validate_unique_name(self) -> str:
+        """Validate unique name against existing configurations.
+        
+        Returns:
+            Configuration hash
+            
+        Raises:
+            ValueError: If unique_name already exists with different hash
+        """
+        # Generate hash first
+        config_dict = asdict(self)
+        config_str = json.dumps(config_dict, sort_keys=True, default=str)
+        config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
+        
+        if self.unique_name:
+            # Check if unique_name registry exists
+            registry_path = Path("data/unique_names_registry.json")
+            registry = {}
+            
+            if registry_path.exists():
+                try:
+                    with open(registry_path, 'r') as f:
+                        registry = json.load(f)
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.warning(f"Could not read unique names registry: {e}")
+                    registry = {}
+            
+            # Also scan existing training output directories for config files
+            training_output_dir = Path("data/training_output")
+            if training_output_dir.exists():
+                for run_dir in training_output_dir.iterdir():
+                    if run_dir.is_dir():
+                        # Look for config JSON files in the run directory
+                        config_files = list(run_dir.glob("config_*.json"))
+                        for config_file in config_files:
+                            try:
+                                with open(config_file, 'r') as f:
+                                    existing_config = json.load(f)
+                                    existing_unique_name = existing_config.get('unique_name')
+                                    if existing_unique_name == self.unique_name:
+                                        # Extract hash from filename (config_HASH.json)
+                                        existing_hash = config_file.stem.replace('config_', '')
+                                        if existing_hash != config_hash:
+                                            raise ValueError(
+                                                f"Unique name '{self.unique_name}' already exists in training output with different configuration hash.\n"
+                                                f"Found in: {config_file}\n"
+                                                f"Existing hash: {existing_hash}\n"
+                                                f"Current hash:  {config_hash}\n"
+                                                f"Please choose a different unique_name or use the existing configuration."
+                                            )
+                                        # Update registry with found config
+                                        registry[self.unique_name] = existing_hash
+                                        logger.info(f"Found existing unique name '{self.unique_name}' in training output with matching hash {existing_hash}")
+                            except (json.JSONDecodeError, IOError, KeyError) as e:
+                                logger.debug(f"Could not read config file {config_file}: {e}")
+                                continue
+            
+            # Check for conflicts in registry
+            if self.unique_name in registry:
+                existing_hash = registry[self.unique_name]
+                if existing_hash != config_hash:
+                    raise ValueError(
+                        f"Unique name '{self.unique_name}' already exists with different configuration hash.\n"
+                        f"Existing hash: {existing_hash}\n"
+                        f"Current hash:  {config_hash}\n"
+                        f"Please choose a different unique_name or use the existing configuration."
+                    )
+                logger.info(f"Using existing unique name '{self.unique_name}' with hash {config_hash}")
+            else:
+                # Register new unique name
+                registry[self.unique_name] = config_hash
+                registry_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with open(registry_path, 'w') as f:
+                        json.dump(registry, f, indent=2, sort_keys=True)
+                    logger.info(f"Registered new unique name '{self.unique_name}' with hash {config_hash}")
+                except IOError as e:
+                    logger.warning(f"Could not save unique names registry: {e}")
+        
+        return config_hash
+    
     def get_config_hash(self) -> str:
         """Generate a unique hash for this configuration.
         
@@ -357,13 +441,4 @@ class TrainingDataConfig:
         Returns:
             8-character hex string representing config hash
         """
-        # Convert config to dict and create reproducible string
-        config_dict = asdict(self)
-        
-        # Sort to ensure consistent ordering
-        config_str = json.dumps(config_dict, sort_keys=True, default=str)
-        
-        # Create hash
-        config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
-        
-        return config_hash
+        return self.validate_unique_name()

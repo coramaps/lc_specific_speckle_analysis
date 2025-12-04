@@ -1,0 +1,325 @@
+LC Speckle Analysis - Generated Configuration Files
+==================================================
+
+Generated 24 configuration files
+Output directory: /mnt/ssddata/users/david/code/lc_specific_speckle_analysis/configs
+Generated on: 2025-12-04 09:46:48
+
+Configuration Summary:
+--------------------
+
+Config: base
+  File: config_base.conf
+  Hash: hash_0000
+  Description: raw data processing
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: False
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: base_mean
+  File: config_base_mean.conf
+  Hash: hash_0001
+  Description: mean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: False
+    quantiles: False
+    aggregation: mean
+    architecture: linear_stats_net
+
+Config: base_std
+  File: config_base_std.conf
+  Hash: hash_0002
+  Description: std aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: False
+    quantiles: False
+    aggregation: std
+    architecture: linear_stats_net
+
+Config: base_stdandmean
+  File: config_base_stdandmean.conf
+  Hash: hash_0003
+  Description: stdandmean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: False
+    quantiles: False
+    aggregation: stdandmean
+    architecture: linear_stats_net
+
+Config: normalized
+  File: config_normalized.conf
+  Hash: hash_0005
+  Description: unit variance normalization
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: True
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: normalized_mean
+  File: config_normalized_mean.conf
+  Hash: hash_0006
+  Description: unit variance normalization + mean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: True
+    quantiles: False
+    aggregation: mean
+    architecture: linear_stats_net
+
+Config: normalized_quantiles
+  File: config_normalized_quantiles.conf
+  Hash: hash_0009
+  Description: unit variance normalization + quantile transformation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: True
+    quantiles: True
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: normalized_std
+  File: config_normalized_std.conf
+  Hash: hash_0007
+  Description: unit variance normalization + std aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: True
+    quantiles: False
+    aggregation: std
+    architecture: linear_stats_net
+
+Config: normalized_stdandmean
+  File: config_normalized_stdandmean.conf
+  Hash: hash_0008
+  Description: unit variance normalization + stdandmean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: True
+    quantiles: False
+    aggregation: stdandmean
+    architecture: linear_stats_net
+
+Config: quantiles
+  File: config_quantiles.conf
+  Hash: hash_0004
+  Description: quantile transformation
+  Parameters:
+    shuffled: False
+    zero_mean: False
+    normalized: False
+    quantiles: True
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: shuffled
+  File: config_shuffled.conf
+  Hash: hash_0020
+  Description: spatially shuffled labels
+  Parameters:
+    shuffled: True
+    zero_mean: False
+    normalized: False
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: shuffled_normalized
+  File: config_shuffled_normalized.conf
+  Hash: hash_0021
+  Description: spatially shuffled labels + unit variance normalization
+  Parameters:
+    shuffled: True
+    zero_mean: False
+    normalized: True
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: shuffled_zeromean
+  File: config_shuffled_zeromean.conf
+  Hash: hash_0022
+  Description: spatially shuffled labels + zero-mean normalization
+  Parameters:
+    shuffled: True
+    zero_mean: True
+    normalized: False
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: shuffled_zeromean_normalized
+  File: config_shuffled_zeromean_normalized.conf
+  Hash: hash_0023
+  Description: spatially shuffled labels + zero-mean normalization + unit variance normalization
+  Parameters:
+    shuffled: True
+    zero_mean: True
+    normalized: True
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: zeromean
+  File: config_zeromean.conf
+  Hash: hash_0010
+  Description: zero-mean normalization
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: False
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: zeromean_mean
+  File: config_zeromean_mean.conf
+  Hash: hash_0011
+  Description: zero-mean normalization + mean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: False
+    quantiles: False
+    aggregation: mean
+    architecture: linear_stats_net
+
+Config: zeromean_normalized
+  File: config_zeromean_normalized.conf
+  Hash: hash_0015
+  Description: zero-mean normalization + unit variance normalization
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: True
+    quantiles: False
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: zeromean_normalized_mean
+  File: config_zeromean_normalized_mean.conf
+  Hash: hash_0016
+  Description: zero-mean normalization + unit variance normalization + mean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: True
+    quantiles: False
+    aggregation: mean
+    architecture: linear_stats_net
+
+Config: zeromean_normalized_quantiles
+  File: config_zeromean_normalized_quantiles.conf
+  Hash: hash_0019
+  Description: zero-mean normalization + unit variance normalization + quantile transformation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: True
+    quantiles: True
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: zeromean_normalized_std
+  File: config_zeromean_normalized_std.conf
+  Hash: hash_0017
+  Description: zero-mean normalization + unit variance normalization + std aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: True
+    quantiles: False
+    aggregation: std
+    architecture: linear_stats_net
+
+Config: zeromean_normalized_stdandmean
+  File: config_zeromean_normalized_stdandmean.conf
+  Hash: hash_0018
+  Description: zero-mean normalization + unit variance normalization + stdandmean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: True
+    quantiles: False
+    aggregation: stdandmean
+    architecture: linear_stats_net
+
+Config: zeromean_quantiles
+  File: config_zeromean_quantiles.conf
+  Hash: hash_0014
+  Description: zero-mean normalization + quantile transformation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: False
+    quantiles: True
+    aggregation: None
+    architecture: test_conv2d_n2
+
+Config: zeromean_std
+  File: config_zeromean_std.conf
+  Hash: hash_0012
+  Description: zero-mean normalization + std aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: False
+    quantiles: False
+    aggregation: std
+    architecture: linear_stats_net
+
+Config: zeromean_stdandmean
+  File: config_zeromean_stdandmean.conf
+  Hash: hash_0013
+  Description: zero-mean normalization + stdandmean aggregation
+  Parameters:
+    shuffled: False
+    zero_mean: True
+    normalized: False
+    quantiles: False
+    aggregation: stdandmean
+    architecture: linear_stats_net
+
+
+Created Files (24):
+---------------
+  config_base.conf
+  config_base_mean.conf
+  config_base_std.conf
+  config_base_stdandmean.conf
+  config_normalized.conf
+  config_normalized_mean.conf
+  config_normalized_quantiles.conf
+  config_normalized_std.conf
+  config_normalized_stdandmean.conf
+  config_quantiles.conf
+  config_shuffled.conf
+  config_shuffled_normalized.conf
+  config_shuffled_zeromean.conf
+  config_shuffled_zeromean_normalized.conf
+  config_zeromean.conf
+  config_zeromean_mean.conf
+  config_zeromean_normalized.conf
+  config_zeromean_normalized_mean.conf
+  config_zeromean_normalized_quantiles.conf
+  config_zeromean_normalized_std.conf
+  config_zeromean_normalized_stdandmean.conf
+  config_zeromean_quantiles.conf
+  config_zeromean_std.conf
+  config_zeromean_stdandmean.conf
