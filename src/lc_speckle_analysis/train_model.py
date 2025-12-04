@@ -102,6 +102,10 @@ class PatchDataset(Dataset):
         patch_data = self.patches[idx]
         label = self.labels[idx]
         
+        # Assert input format consistency
+        assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+        assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+        
         # Apply modular data processing pipeline
         processed_data = self._apply_modular_processing(patch_data)
         
@@ -279,18 +283,12 @@ class ModelTrainer:
         # Create output directories with config hash to prevent conflicts
         self.config_hash = config.get_config_hash()
         
-        # Use unique_name for directory naming if available, otherwise fall back to hash
-        if config.unique_name:
-            directory_name = f"{config.unique_name}_{self.config_hash}"
-            self.run_id = directory_name
-        elif run_id:
-            directory_name = f"{run_id}_{self.config_hash}"
-            self.run_id = directory_name
+        if run_id:
+            self.run_id = f"{run_id}_{self.config_hash}"
+            self.output_dir = project_root / "data" / "training_output" / f"{run_id}_{self.config_hash}"
         else:
-            directory_name = self.config_hash
             self.run_id = self.config_hash
-            
-        self.output_dir = project_root / "data" / "training_output" / directory_name
+            self.output_dir = project_root / "data" / "training_output" / f"{self.config_hash}"
         
         self.output_dir.mkdir(parents=True, exist_ok=True)
         

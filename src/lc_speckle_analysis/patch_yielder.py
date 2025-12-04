@@ -74,7 +74,12 @@ class Patch:
         """
         from .modular_processing import process_patch
         
-        return process_patch(
+        # Assert consistent (H, W, C) format and validate channels
+        assert self.data.ndim == 3, f"Expected 3D patch data, got {self.data.ndim}D with shape {self.data.shape}"
+        assert self.data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {self.data.shape[-1]} channels in shape {self.data.shape}"
+        
+        # Process with (H, W, C) format - modular processing now handles this format
+        result = process_patch(
             patch_data=self.data,
             shuffled=shuffled,
             zero_mean=zero_mean,
@@ -83,6 +88,8 @@ class Patch:
             aggregation=aggregation,
             seed=seed
         )
+        
+        return result
     
     def get_data_legacy(self, modus: str = "raw") -> np.ndarray:
         """
@@ -1367,8 +1374,13 @@ class PatchYielder:
                     patch_vv = array_1_vv[row_start:row_end, col_start:col_end]
                     patch_vh = array_1_vh[row_start:row_end, col_start:col_end]
                     
-                    # Combine VV and VH channels
+                    # Combine VV and VH channels in (H, W, C) format
                     patch_data = np.stack([patch_vv, patch_vh], axis=-1)
+                    
+                    # Assert consistent format
+                    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+                    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+                    assert patch_data.shape[0] == patch_size and patch_data.shape[1] == patch_size, f"Expected patch size {patch_size}x{patch_size}, got {patch_data.shape[0]}x{patch_data.shape[1]}"
                     
                     # Calculate patch bounds in world coordinates
                     patch_transform = mask_transform * rasterio.Affine.translation(col_start, row_start)

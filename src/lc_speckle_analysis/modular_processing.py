@@ -19,26 +19,29 @@ def apply_spatial_shuffle(patch_data: np.ndarray, seed: int = 42) -> np.ndarray:
     Both channels are shuffled in the same order.
     
     Args:
-        patch_data: Input patch data with shape (channels, height, width)
+        patch_data: Input patch data with shape (height, width, channels)
         seed: Random seed for reproducible shuffling
         
     Returns:
         Spatially shuffled patch data
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     np.random.seed(seed)
     processed_data = patch_data.copy()
-    channels, height, width = processed_data.shape
+    height, width, channels = processed_data.shape
     
-    # Create consistent permutation for all channels
+    # Create consistent permutation for all pixels
     n_pixels = height * width
     perm_indices = np.random.permutation(n_pixels)
     
     # Apply same shuffling to all channels
     for channel_idx in range(channels):
-        channel_data = processed_data[channel_idx, :, :]
+        channel_data = processed_data[:, :, channel_idx]
         flat_data = channel_data.flatten()
         shuffled_data = flat_data[perm_indices]
-        processed_data[channel_idx, :, :] = shuffled_data.reshape(height, width)
+        processed_data[:, :, channel_idx] = shuffled_data.reshape(height, width)
     
     return processed_data
 
@@ -49,17 +52,20 @@ def apply_zero_mean(patch_data: np.ndarray) -> np.ndarray:
     Subtracts the mean per patch and channel to center each patch at zero.
     
     Args:
-        patch_data: Input patch data with shape (channels, height, width)
+        patch_data: Input patch data with shape (height, width, channels)
         
     Returns:
         Zero-mean patch data
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     processed_data = patch_data.copy()
     
-    for channel in range(processed_data.shape[0]):
-        channel_data = processed_data[channel, :, :]
+    for channel in range(processed_data.shape[-1]):
+        channel_data = processed_data[:, :, channel]
         channel_mean = np.mean(channel_data)
-        processed_data[channel, :, :] = channel_data - channel_mean
+        processed_data[:, :, channel] = channel_data - channel_mean
     
     logger.debug(f"Applied zero-mean normalization to patch with shape {patch_data.shape}")
     return processed_data
@@ -71,20 +77,26 @@ def apply_normalization(patch_data: np.ndarray) -> np.ndarray:
     Applies per-channel standardization to achieve std=1.
     
     Args:
-        patch_data: Input patch data with shape (channels, height, width)
+        patch_data: Input patch data with shape (height, width, channels)
         
     Returns:
         Normalized patch data with std=1 per channel
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     processed_data = patch_data.copy()
     
-    for channel in range(processed_data.shape[0]):
-        channel_data = processed_data[channel, :, :]
+    for channel in range(processed_data.shape[-1]):
+        channel_data = processed_data[:, :, channel]
+        channel_mean = np.mean(channel_data)
         channel_std = np.std(channel_data)
         
         if channel_std > 0:  # Avoid division by zero
-            processed_data[channel, :, :] = channel_data / channel_std
+            # Normalize to std=1 while preserving mean: mean + (data - mean) / std
+            processed_data[:, :, channel] = channel_mean + (channel_data - channel_mean) / channel_std
         else:
+            processed_data[:, :, channel]
             logger.warning(f"Channel {channel} has zero standard deviation, skipping normalization")
     
     return processed_data
@@ -96,16 +108,19 @@ def apply_quantile_transformation(patch_data: np.ndarray) -> np.ndarray:
     Transforms pixel values to uniform quantiles per channel.
     
     Args:
-        patch_data: Input patch data with shape (channels, height, width)
+        patch_data: Input patch data with shape (height, width, channels)
         
     Returns:
         Quantile-transformed patch data
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     processed_data = patch_data.copy()
-    channels, height, width = processed_data.shape
+    height, width, channels = processed_data.shape
     
     for channel in range(channels):
-        channel_data = processed_data[channel, :, :]
+        channel_data = processed_data[:, :, channel]
         flat_data = channel_data.flatten().reshape(-1, 1)
         
         # Use quantile transformer with appropriate number of quantiles
@@ -114,7 +129,7 @@ def apply_quantile_transformation(patch_data: np.ndarray) -> np.ndarray:
         n_quantiles = min(1000, n_samples)
         qt = QuantileTransformer(output_distribution='uniform', n_quantiles=n_quantiles, random_state=42)
         transformed_flat = qt.fit_transform(flat_data)
-        processed_data[channel, :, :] = transformed_flat.reshape(height, width)
+        processed_data[:, :, channel] = transformed_flat.reshape(height, width)
     
     return processed_data
 
@@ -125,17 +140,20 @@ def apply_aggregation(patch_data: np.ndarray, aggregation_type: str) -> np.ndarr
     Computes statistical features from patch data.
     
     Args:
-        patch_data: Input patch data with shape (channels, height, width)
+        patch_data: Input patch data with shape (height, width, channels)
         aggregation_type: Type of aggregation ('std', 'mean', or 'stdandmean')
         
     Returns:
         Aggregated features as 1D array
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     if aggregation_type not in ['std', 'mean', 'stdandmean']:
         raise ValueError(f"Invalid aggregation type: {aggregation_type}")
     
-    vv_channel = patch_data[0, :, :]
-    vh_channel = patch_data[1, :, :]
+    vv_channel = patch_data[:, :, 0]
+    vh_channel = patch_data[:, :, 1]
     
     if aggregation_type == 'mean':
         return np.array([np.mean(vv_channel), np.mean(vh_channel)])
@@ -165,7 +183,7 @@ def process_patch(patch_data: np.ndarray,
     5. Statistical aggregation (if specified)
     
     Args:
-        patch_data: Input patch data with shape (channels, height, width)
+        patch_data: Input patch data with shape (height, width, channels)
         shuffled: Whether to apply spatial shuffling
         zero_mean: Whether to subtract mean per patch and channel
         normalized: Whether to normalize to std=1
@@ -175,9 +193,12 @@ def process_patch(patch_data: np.ndarray,
         
     Returns:
         Processed patch data. Shape depends on processing configuration.
-        3D array (channels, height, width) if no aggregation,
+        3D array (height, width, channels) if no aggregation,
         1D feature vector if aggregation is applied.
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     processed_data = patch_data.copy()
     
     # Step 1: Spatial shuffling

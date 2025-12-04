@@ -36,7 +36,7 @@ def find_training_results() -> List[Path]:
     logger.info(f"Found {len(result_dirs)} models with results")
     return result_dirs
 
-def extract_oa_from_results(results_dir: Path) -> Tuple[str, float, str]:
+def extract_oa_from_results(results_dir: Path) -> Tuple[str, float, str, bool]:
     """Extract OA from results and get unique_id from config."""
     results_file = results_dir / "latest_results.txt"
     
@@ -69,14 +69,19 @@ def extract_oa_from_results(results_dir: Path) -> Tuple[str, float, str]:
         else:
             unique_id = unique_name
         
-        logger.info(f"Model {unique_id}: OA = {oa:.4f}")
-        return unique_id, oa, unique_name
+        # Extract aggregation info from config (nested in data_processing)
+        data_processing = config.get('data_processing', {})
+        aggregation = data_processing.get('aggregation', None)
+        is_spatial = aggregation is None
+        
+        logger.info(f"Model {unique_id}: OA = {oa:.4f}, Spatial = {is_spatial}")
+        return unique_id, oa, unique_name, is_spatial
         
     except Exception as e:
         logger.error(f"Error reading results from {results_dir}: {e}")
-        return results_dir.name, 0.0, results_dir.name
+        return results_dir.name, 0.0, results_dir.name, True
 
-def create_oa_barplot(model_data: List[Tuple[str, float, str]], output_file: str = "oa_barplot.png"):
+def create_oa_barplot(model_data: List[Tuple[str, float, str, bool]], output_file: str = "oa_barplot.png"):
     """Create bar plot of OA values sorted by performance."""
     
     if not model_data:
@@ -89,17 +94,25 @@ def create_oa_barplot(model_data: List[Tuple[str, float, str]], output_file: str
     unique_ids = [item[0] for item in sorted_data]
     oa_values = [item[1] for item in sorted_data]
     full_names = [item[2] for item in sorted_data]
+    is_spatial = [item[3] for item in sorted_data]
     
     # Create figure
     plt.figure(figsize=(15, 8))
     
-    # Create bar plot
-    bars = plt.bar(range(len(unique_ids)), oa_values, color='steelblue', alpha=0.7)
+    # Create bar plot with colors based on aggregation
+    colors = ['steelblue' if spatial else 'darkorange' for spatial in is_spatial]
+    bars = plt.bar(range(len(unique_ids)), oa_values, color=colors, alpha=0.7)
     
     # Customize plot
     plt.xlabel('Model Configuration (Unique ID)', fontsize=12)
     plt.ylabel('Overall Accuracy (OA)', fontsize=12)
-    plt.title('Overall Accuracy by Model Configuration', fontsize=14, fontweight='bold')
+    plt.title('Overall Accuracy by Model Configuration\n(Blue: Spatial Models, Orange: Statistical Models)', fontsize=14, fontweight='bold')
+    
+    # Add legend
+    import matplotlib.patches as mpatches
+    spatial_patch = mpatches.Patch(color='steelblue', alpha=0.7, label='Spatial Models (aggregation=None)')
+    statistical_patch = mpatches.Patch(color='darkorange', alpha=0.7, label='Statistical Models (aggregation≠None)')
+    plt.legend(handles=[spatial_patch, statistical_patch], loc='upper right')
     
     # Set x-axis labels with rotation
     plt.xticks(range(len(unique_ids)), unique_ids, rotation=45, ha='right')
@@ -129,9 +142,12 @@ def create_oa_barplot(model_data: List[Tuple[str, float, str]], output_file: str
     logger.info(f"Plot saved to: {output_file.replace('.png', '.pdf')}")
     
     # Show summary
+    spatial_count = sum(is_spatial)
+    statistical_count = len(is_spatial) - spatial_count
     logger.info(f"\nSummary of {len(model_data)} models:")
-    logger.info(f"Best OA: {max(oa_values):.4f} ({unique_ids[0]})")
-    logger.info(f"Worst OA: {min(oa_values):.4f} ({unique_ids[-1]})")
+    logger.info(f"Spatial models (blue): {spatial_count}, Statistical models (orange): {statistical_count}")
+    logger.info(f"Best OA: {max(oa_values):.4f} ({unique_ids[0]}) {'[Spatial]' if is_spatial[0] else '[Statistical]'}")
+    logger.info(f"Worst OA: {min(oa_values):.4f} ({unique_ids[-1]}) {'[Spatial]' if is_spatial[-1] else '[Statistical]'}")
     logger.info(f"Mean OA: {np.mean(oa_values):.4f}")
     
     return output_file
@@ -150,8 +166,8 @@ def main():
     # Extract OA data from all results
     model_data = []
     for results_dir in result_dirs:
-        unique_id, oa, full_name = extract_oa_from_results(results_dir)
-        model_data.append((unique_id, oa, full_name))
+        unique_id, oa, full_name, is_spatial = extract_oa_from_results(results_dir)
+        model_data.append((unique_id, oa, full_name, is_spatial))
     
     # Create bar plot
     output_file = create_oa_barplot(model_data, "oa_results_barplot.png")
@@ -161,9 +177,9 @@ def main():
     # Also save data to CSV for reference
     csv_file = "oa_results_summary.csv"
     with open(csv_file, 'w') as f:
-        f.write("unique_id,overall_accuracy,full_name\n")
-        for unique_id, oa, full_name in sorted(model_data, key=lambda x: x[1], reverse=True):
-            f.write(f"{unique_id},{oa:.6f},{full_name}\n")
+        f.write("unique_id,overall_accuracy,full_name,is_spatial\n")
+        for unique_id, oa, full_name, is_spatial in sorted(model_data, key=lambda x: x[1], reverse=True):
+            f.write(f"{unique_id},{oa:.6f},{full_name},{is_spatial}\n")
     
     logger.info(f"Results summary saved to: {csv_file}")
 

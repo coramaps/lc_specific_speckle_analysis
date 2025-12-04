@@ -50,6 +50,9 @@ def apply_modus_processing(patch_data: np.ndarray, modus: str) -> np.ndarray:
     Returns:
         Processed patch data
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     if modus == "raw":
         return patch_data.copy()
         
@@ -144,6 +147,9 @@ def save_patch_as_tiff(patch_data: np.ndarray, output_path: Path,
         patch_bounds: (minx, miny, maxx, maxy) bounds for georeferencing
         crs: Coordinate reference system
     """
+    assert patch_data.ndim == 3, f"Expected 3D patch data, got {patch_data.ndim}D with shape {patch_data.shape}"
+    assert patch_data.shape[-1] == 2, f"Expected 2 channels (VV, VH), got {patch_data.shape[-1]} channels in shape {patch_data.shape}"
+    
     height, width, channels = patch_data.shape
     
     # Create transform from bounds (if provided) or use identity
