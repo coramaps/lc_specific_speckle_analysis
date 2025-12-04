@@ -279,12 +279,18 @@ class ModelTrainer:
         # Create output directories with config hash to prevent conflicts
         self.config_hash = config.get_config_hash()
         
-        if run_id:
-            self.run_id = f"{run_id}_{self.config_hash}"
-            self.output_dir = project_root / "data" / "training_output" / f"{run_id}_{self.config_hash}"
+        # Use unique_name for directory naming if available, otherwise fall back to hash
+        if config.unique_name:
+            directory_name = f"{config.unique_name}_{self.config_hash}"
+            self.run_id = directory_name
+        elif run_id:
+            directory_name = f"{run_id}_{self.config_hash}"
+            self.run_id = directory_name
         else:
+            directory_name = self.config_hash
             self.run_id = self.config_hash
-            self.output_dir = project_root / "data" / "training_output" / f"{self.config_hash}"
+            
+        self.output_dir = project_root / "data" / "training_output" / directory_name
         
         self.output_dir.mkdir(parents=True, exist_ok=True)
         

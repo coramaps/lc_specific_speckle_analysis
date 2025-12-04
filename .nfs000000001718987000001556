@@ -1,0 +1,52 @@
+nohup: ignoring input
+Starting parallel training for 24 configurations at Do 4. Dez 12:13:19 UTC 2025
+Master script PID: 3278457
+To kill all training: pkill -P 3278457 -f train_model
+Starting training: config_base (PID will be logged)
+Training config_base started with PID: 3278471
+Starting training: config_base_mean (PID will be logged)
+Training config_base_mean started with PID: 3278472
+✓ config_base_mean completed (PID: 3278472)
+Starting training: config_base_std (PID will be logged)
+Training config_base_std started with PID: 3280334
+✓ config_base completed (PID: 3278471)
+Starting training: config_base_stdandmean (PID will be logged)
+Training config_base_stdandmean started with PID: 3281504
+✓ config_base_std completed (PID: 3280334)
+Starting training: config_normalized (PID will be logged)
+Training config_normalized started with PID: 3283188
+✓ config_base_stdandmean completed (PID: 3281504)
+Starting training: config_normalized_mean (PID will be logged)
+Training config_normalized_mean started with PID: 3284195
+✓ config_normalized completed (PID: 3283188)
+Starting training: config_normalized_quantiles (PID will be logged)
+Training config_normalized_quantiles started with PID: 3285888
+✓ config_normalized_mean completed (PID: 3284195)
+Starting training: config_normalized_std (PID will be logged)
+Training config_normalized_std started with PID: 3286590
+✓ config_normalized_std completed (PID: 3286590)
+Starting training: config_normalized_stdandmean (PID will be logged)
+Training config_normalized_stdandmean started with PID: 3287499
+✓ config_normalized_stdandmean completed (PID: 3287499)
+Starting training: config_quantiles (PID will be logged)
+Training config_quantiles started with PID: 3288817
+environment: line 7: 3285888 Killed                  poetry run python -m src.lc_speckle_analysis.train_model --config "$config_file" >> "$log_file" 2>&1
+✗ config_normalized_quantiles failed (PID: 3285888) - check logs/training_config_normalized_quantiles.log
+Starting training: config_shuffled (PID will be logged)
+Training config_shuffled started with PID: 3289491
+environment: line 7: 3288817 Killed                  poetry run python -m src.lc_speckle_analysis.train_model --config "$config_file" >> "$log_file" 2>&1
+✗ config_quantiles failed (PID: 3288817) - check logs/training_config_quantiles.log
+Starting training: config_shuffled_normalized (PID will be logged)
+Training config_shuffled_normalized started with PID: 3289501
+✗ config_shuffled failed (PID: 3289491) - check logs/training_config_shuffled.log
+Starting training: config_shuffled_zeromean (PID will be logged)
+Training config_shuffled_zeromean started with PID: 3290003
+✗ config_shuffled_normalized failed (PID: 3289501) - check logs/training_config_shuffled_normalized.log
+Starting training: config_shuffled_zeromean_normalized (PID will be logged)
+Training config_shuffled_zeromean_normalized started with PID: 3290008
+✗ config_shuffled_zeromean_normalized failed (PID: 3290008) - check logs/training_config_shuffled_zeromean_normalized.log
+Starting training: config_zeromean (PID will be logged)
+Training config_zeromean started with PID: 3290828
+✗ config_shuffled_zeromean failed (PID: 3290003) - check logs/training_config_shuffled_zeromean.log
+Starting training: config_zeromean_mean (PID will be logged)
+Training config_zeromean_mean started with PID: 3290837

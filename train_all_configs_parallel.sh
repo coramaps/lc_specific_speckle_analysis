@@ -21,6 +21,8 @@ mkdir -p logs
 # Get total number of configs
 total_configs=$(wc -l < configs/generated_configs_list.txt)
 echo "Starting parallel training for $total_configs configurations at $(date)"
+echo "Master script PID: $$"
+echo "To kill all training: pkill -P $$ -f train_model"
 
 # Function to train a single config
 train_config() {
@@ -29,24 +31,30 @@ train_config() {
     log_file="logs/training_${config_name}.log"
     
     echo "Starting training: $config_name at $(date)" >> "$log_file"
+    echo "Starting training: $config_name (PID will be logged)" 
     
-    # Run training with poetry, forcing CPU usage and redirect output to log file
-    if CUDA_VISIBLE_DEVICES="" poetry run python -m src.lc_speckle_analysis.train_model --config "$config_file" >> "$log_file" 2>&1; then
+    # Run training with poetry on GPU and redirect output to log file
+    poetry run python -m src.lc_speckle_analysis.train_model --config "$config_file" >> "$log_file" 2>&1 &
+    training_pid=$!
+    echo "Training $config_name started with PID: $training_pid"
+    
+    # Wait for the process to complete and check result
+    if wait $training_pid; then
         echo "Completed: $config_name at $(date)" >> "$log_file"
-        echo "✓ $config_name completed"
+        echo "✓ $config_name completed (PID: $training_pid)"
     else
         echo "Failed: $config_name at $(date)" >> "$log_file"
-        echo "✗ $config_name failed - check $log_file"
+        echo "✗ $config_name failed (PID: $training_pid) - check $log_file"
     fi
 }
 
 # Export the function so xargs can use it
 export -f train_config
 
-# Run training in parallel with 4 jobs at once (adjust -P value as needed)
-# -P 4: run 4 parallel processes
+# Run training in parallel with 2 jobs at once (Tesla V100 GPU memory limit)
+# -P 2: run 2 parallel processes on GPU
 # -I {}: replace {} with input line
-cat configs/generated_configs_list.txt | xargs -P 4 -I {} bash -c 'train_config "{}"'
+cat configs/generated_configs_list.txt | xargs -P 2 -I {} bash -c 'train_config "{}"'
 
 echo "All parallel training completed at $(date)"
 echo "Check logs/ directory for individual training logs"
