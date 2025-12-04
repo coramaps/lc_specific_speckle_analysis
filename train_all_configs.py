@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Dict, List
 import json
+import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,12 +31,32 @@ class ConfigTrainingRunner:
         self.failed_configs = []
         self.successful_configs = []
         
-    def discover_config_files(self) -> List[Path]:
-        """Discover all config_*.conf files."""
-        config_files = list(self.configs_dir.glob("config_*.conf"))
-        config_files.sort()  # Ensure consistent ordering
+    def discover_config_files(self, config_list_file: str = None) -> List[Path]:
+        """Discover config files from list or directory."""
+        if config_list_file:
+            # Load config files from list
+            config_list_path = Path(config_list_file)
+            if not config_list_path.exists():
+                raise FileNotFoundError(f"Config list file not found: {config_list_file}")
+            
+            config_files = []
+            with open(config_list_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        config_path = self.base_dir / line
+                        if config_path.exists():
+                            config_files.append(config_path)
+                        else:
+                            logger.warning(f"Config file not found: {config_path}")
+            
+            logger.info(f"Loaded {len(config_files)} configuration files from {config_list_file}:")
+        else:
+            # Discover all config_*.conf files
+            config_files = list(self.configs_dir.glob("config_*.conf"))
+            config_files.sort()  # Ensure consistent ordering
+            logger.info(f"Discovered {len(config_files)} configuration files:")
         
-        logger.info(f"Discovered {len(config_files)} configuration files:")
         for config_file in config_files:
             logger.info(f"  - {config_file.name}")
         
@@ -156,12 +177,12 @@ class ConfigTrainingRunner:
         
         logger.info(f"{'='*80}")
     
-    def run_all_training(self):
+    def run_all_training(self, config_list_file: str = None):
         """Run training for all discovered configurations."""
         logger.info("🎯 Starting systematic training of all modular processing configurations")
         
         # Discover configurations
-        config_files = self.discover_config_files()
+        config_files = self.discover_config_files(config_list_file)
         
         if not config_files:
             logger.error("No configuration files found!")
@@ -197,10 +218,15 @@ class ConfigTrainingRunner:
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Train all configurations systematically")
+    parser.add_argument('--config-list', type=str, help='Path to file containing list of config files to train')
+    
+    args = parser.parse_args()
+    
     runner = ConfigTrainingRunner()
     
     try:
-        runner.run_all_training()
+        runner.run_all_training(args.config_list)
     except KeyboardInterrupt:
         logger.info("\n🛑 Training interrupted by user")
         runner.print_summary()

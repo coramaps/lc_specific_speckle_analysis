@@ -34,7 +34,7 @@ train_config() {
     echo "Starting training: $config_name (PID will be logged)" 
     
     # Run training with poetry on GPU and redirect output to log file
-    poetry run python -m src.lc_speckle_analysis.train_model --config "$config_file" >> "$log_file" 2>&1 &
+    poetry run python -m src.lc_speckle_analysis.train_model --config "$config_file" --run-id "parallel_training" >> "$log_file" 2>&1 &
     training_pid=$!
     echo "Training $config_name started with PID: $training_pid"
     
@@ -51,10 +51,10 @@ train_config() {
 # Export the function so xargs can use it
 export -f train_config
 
-# Run training in parallel with 2 jobs at once (Tesla V100 GPU memory limit)
-# -P 2: run 2 parallel processes on GPU
+# Run training in parallel with 4 jobs at once (Tesla V100 GPU can handle it)
+# -P 4: run 4 parallel processes on GPU
 # -I {}: replace {} with input line
-cat configs/generated_configs_list.txt | xargs -P 2 -I {} bash -c 'train_config "{}"'
+cat configs/generated_configs_list.txt | xargs -P 4 -I {} bash -c 'train_config "{}"'
 
 echo "All parallel training completed at $(date)"
 echo "Check logs/ directory for individual training logs"

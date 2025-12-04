@@ -283,6 +283,9 @@ class ModelTrainer:
         # Create output directories with config hash to prevent conflicts
         self.config_hash = config.get_config_hash()
         
+        # Assert that run_id is provided - fail if not set
+        assert run_id is not None, "run_id is mandatory! Use --run-id parameter when calling train_model"
+        
         if run_id:
             self.run_id = f"{run_id}_{self.config_hash}"
             self.output_dir = project_root / "data" / "training_output" / f"{run_id}_{self.config_hash}"
@@ -1120,8 +1123,8 @@ def main():
         parser = argparse.ArgumentParser(description='Train TestConv2D network on patch data')
         parser.add_argument('--config', type=str, default=None,
                            help='Path to configuration file (default: data/config.conf)')
-        parser.add_argument('--run-id', type=str, default=None,
-                           help='Custom run ID for this training session')
+        parser.add_argument('--run-id', type=str, required=True,
+                           help='Mandatory run ID for this training session')
         args = parser.parse_args()
         
         logger.info("Starting TestFlat2Layers training script...")
